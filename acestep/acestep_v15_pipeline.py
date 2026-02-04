@@ -136,6 +136,7 @@ def main():
     parser.add_argument("--use_flash_attention", type=lambda x: x.lower() in ['true', '1', 'yes'], default=None, help="Use flash attention (default: auto-detect)")
     parser.add_argument("--offload_to_cpu", type=lambda x: x.lower() in ['true', '1', 'yes'], default=auto_offload, help=f"Offload models to CPU (default: {'True' if auto_offload else 'False'}, auto-detected based on GPU VRAM)")
     parser.add_argument("--offload_dit_to_cpu", type=lambda x: x.lower() in ['true', '1', 'yes'], default=False, help="Offload DiT to CPU (default: False)")
+    parser.add_argument("--multi_gpu", type=lambda x: x.lower() in ['true', '1', 'yes'], default=None, help="Enable multi-GPU support with device_map='auto' (default: auto-detect)")
 
     # API mode argument
     parser.add_argument("--enable-api", action="store_true", help="Enable API endpoints (default: False)")
@@ -212,7 +213,17 @@ def main():
             use_flash_attention = args.use_flash_attention
             if use_flash_attention is None:
                 use_flash_attention = dit_handler.is_flash_attention_available()
-            
+
+            # Auto-detect multi-GPU: enable if multiple GPUs available and not explicitly disabled
+            multi_gpu = args.multi_gpu
+            if multi_gpu is None and torch.cuda.is_available():
+                num_gpus = torch.cuda.device_count()
+                if num_gpus > 1:
+                    multi_gpu = True
+                    print(f"Multi-GPU auto-enabled: {num_gpus} GPUs detected")
+                else:
+                    multi_gpu = False
+
             # Initialize DiT handler
             print(f"Initializing DiT model: {args.config_path} on {args.device}...")
             init_status, enable_generate = dit_handler.initialize_service(
@@ -222,7 +233,8 @@ def main():
                 use_flash_attention=use_flash_attention,
                 compile_model=False,
                 offload_to_cpu=args.offload_to_cpu,
-                offload_dit_to_cpu=args.offload_dit_to_cpu
+                offload_dit_to_cpu=args.offload_dit_to_cpu,
+                multi_gpu=multi_gpu if multi_gpu else False,
             )
             
             if not enable_generate:

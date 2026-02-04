@@ -115,6 +115,9 @@ build_gradio_args() {
     [ -n "$ACESTEP_LM_MODEL_PATH" ] && args="$args --lm_model_path $ACESTEP_LM_MODEL_PATH"
     [ "${ACESTEP_INIT_SERVICE:-false}" = "true" ] && args="$args --init_service true"
     [ "${ACESTEP_OFFLOAD_CPU:-false}" = "true" ] && args="$args --offload_to_cpu true"
+    # Multi-GPU: only pass if explicitly set (auto-detect is the default)
+    [ "${ACESTEP_MULTI_GPU:-}" = "true" ] && args="$args --multi_gpu true"
+    [ "${ACESTEP_MULTI_GPU:-}" = "false" ] && args="$args --multi_gpu false"
     [ "${ACESTEP_ENABLE_API:-true}" = "true" ] && args="$args --enable-api"
     [ -n "$ACESTEP_API_KEY" ] && args="$args --api-key $ACESTEP_API_KEY"
     [ -n "$ACESTEP_UI_LANGUAGE" ] && args="$args --language $ACESTEP_UI_LANGUAGE"
@@ -189,6 +192,9 @@ start_both() {
     [ -n "$ACESTEP_LM_MODEL_PATH" ] && gradio_args="$gradio_args --lm_model_path $ACESTEP_LM_MODEL_PATH"
     [ "${ACESTEP_INIT_SERVICE:-false}" = "true" ] && gradio_args="$gradio_args --init_service true"
     [ "${ACESTEP_OFFLOAD_CPU:-false}" = "true" ] && gradio_args="$gradio_args --offload_to_cpu true"
+    # Multi-GPU: only pass if explicitly set (auto-detect is the default)
+    [ "${ACESTEP_MULTI_GPU:-}" = "true" ] && gradio_args="$gradio_args --multi_gpu true"
+    [ "${ACESTEP_MULTI_GPU:-}" = "false" ] && gradio_args="$gradio_args --multi_gpu false"
     [ -n "$ACESTEP_UI_LANGUAGE" ] && gradio_args="$gradio_args --language $ACESTEP_UI_LANGUAGE"
 
     if [ -n "$ACESTEP_AUTH_USERNAME" ] && [ -n "$ACESTEP_AUTH_PASSWORD" ]; then

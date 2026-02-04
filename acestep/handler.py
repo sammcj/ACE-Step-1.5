@@ -306,7 +306,7 @@ class AceStepHandler:
         }
     
     def initialize_service(
-        self, 
+        self,
         project_root: str,
         config_path: str,
         device: str = "auto",
@@ -315,10 +315,11 @@ class AceStepHandler:
         offload_to_cpu: bool = False,
         offload_dit_to_cpu: bool = False,
         quantization: Optional[str] = None,
+        multi_gpu: bool = False,
     ) -> Tuple[str, bool]:
         """
         Initialize DiT model service
-        
+
         Args:
             project_root: Project root path (may be checkpoints directory, will be handled automatically)
             config_path: Model config directory name (e.g., "acestep-v15-turbo")
@@ -349,6 +350,15 @@ class AceStepHandler:
             self.offload_dit_to_cpu = offload_dit_to_cpu
             # Set dtype based on device: bfloat16 for cuda, float32 for cpu
             self.dtype = torch.bfloat16 if device in ["cuda","xpu"] else torch.float32
+
+            # Multi-GPU support: detect available GPUs and use device_map="auto" if enabled
+            self.multi_gpu = False
+            self.num_gpus = 0
+            if device == "cuda" and torch.cuda.is_available():
+                self.num_gpus = torch.cuda.device_count()
+                if multi_gpu and self.num_gpus > 1:
+                    self.multi_gpu = True
+                    logger.info(f"[initialize_service] Multi-GPU enabled: {self.num_gpus} GPUs detected")
             self.quantization = quantization
             if self.quantization is not None:
                 assert compile_model, "Quantization requires compile_model to be True"
@@ -393,39 +403,54 @@ class AceStepHandler:
                 else:
                     attn_implementation = "sdpa"
 
+                # Build model loading kwargs
+                model_kwargs = {
+                    "trust_remote_code": True,
+                    "attn_implementation": attn_implementation,
+                    "torch_dtype": self.dtype,
+                }
+
+                # Use device_map="auto" for multi-GPU to distribute model across GPUs
+                if self.multi_gpu:
+                    model_kwargs["device_map"] = "auto"
+                    logger.info(f"[initialize_service] Loading model with device_map='auto' across {self.num_gpus} GPUs")
+
                 try:
                     logger.info(f"[initialize_service] Attempting to load model with attention implementation: {attn_implementation}")
                     self.model = AutoModel.from_pretrained(
-                        acestep_v15_checkpoint_path, 
-                        trust_remote_code=True, 
-                        attn_implementation=attn_implementation,
-                        dtype="bfloat16"
+                        acestep_v15_checkpoint_path,
+                        **model_kwargs
                     )
                 except Exception as e:
                     logger.warning(f"[initialize_service] Failed to load model with {attn_implementation}: {e}")
                     if attn_implementation == "sdpa":
                         logger.info("[initialize_service] Falling back to eager attention")
                         attn_implementation = "eager"
+                        model_kwargs["attn_implementation"] = attn_implementation
                         self.model = AutoModel.from_pretrained(
-                            acestep_v15_checkpoint_path, 
-                            trust_remote_code=True, 
-                            attn_implementation=attn_implementation
+                            acestep_v15_checkpoint_path,
+                            **model_kwargs
                         )
                     else:
                         raise e
 
                 self.model.config._attn_implementation = attn_implementation
                 self.config = self.model.config
-                # Move model to device and set dtype
-                if not self.offload_to_cpu:
-                    self.model = self.model.to(device).to(self.dtype)
-                else:
-                    # If offload_to_cpu is True, check if we should keep DiT on GPU
-                    if not self.offload_dit_to_cpu:
-                        logger.info(f"[initialize_service] Keeping main model on {device} (persistent)")
+
+                # Move model to device and set dtype (skip if using device_map for multi-GPU)
+                if not self.multi_gpu:
+                    if not self.offload_to_cpu:
                         self.model = self.model.to(device).to(self.dtype)
                     else:
-                        self.model = self.model.to("cpu").to(self.dtype)
+                        # If offload_to_cpu is True, check if we should keep DiT on GPU
+                        if not self.offload_dit_to_cpu:
+                            logger.info(f"[initialize_service] Keeping main model on {device} (persistent)")
+                            self.model = self.model.to(device).to(self.dtype)
+                        else:
+                            self.model = self.model.to("cpu").to(self.dtype)
+                else:
+                    logger.info(f"[initialize_service] Model distributed across GPUs: {self.model.hf_device_map if hasattr(self.model, 'hf_device_map') else 'auto'}")
+
                 self.model.eval()
                 
                 if compile_model:

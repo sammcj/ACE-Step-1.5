@@ -75,6 +75,7 @@ ACESTEP_LM_BACKEND=vllm                        # LM backend: vllm, pt
 ACESTEP_OFFLOAD_CPU=false                      # Enable CPU offloading for low VRAM
 ACESTEP_INIT_SERVICE=false                     # Pre-initialize models on startup
 ACESTEP_SKIP_MODEL_DOWNLOAD=false              # Skip auto-download (for pre-mounted models)
+ACESTEP_MULTI_GPU=                             # Multi-GPU: auto (default), true, or false
 
 # UI Settings
 ACESTEP_UI_LANGUAGE=en                         # Language: en, zh, ja
@@ -123,6 +124,31 @@ For systems with <16GB VRAM, enable CPU offloading:
 ```bash
 ACESTEP_OFFLOAD_CPU=true docker compose up
 ```
+
+### Multi-GPU Support
+
+ACE-Step supports automatic model distribution across multiple GPUs using HuggingFace Accelerate's `device_map="auto"`. This is **auto-enabled** when multiple GPUs are detected.
+
+**How it works:**
+- Model layers are automatically distributed across available GPUs
+- Reduces per-GPU VRAM usage, allowing larger models or longer generations
+- No configuration needed - just ensure multiple GPUs are visible to Docker
+
+**Manual control:**
+```bash
+# Explicitly enable multi-GPU
+ACESTEP_MULTI_GPU=true docker compose up
+
+# Disable multi-GPU (use single GPU only)
+ACESTEP_MULTI_GPU=false docker compose up
+
+# Use a specific GPU
+CUDA_VISIBLE_DEVICES=1 docker compose up
+```
+
+**Example: 2x RTX 3090 (24GB each)**
+- Without multi-GPU: Limited to 24GB, may OOM on large batches
+- With multi-GPU: Model split across 48GB total, handles larger workloads
 
 ## Volume Management
 

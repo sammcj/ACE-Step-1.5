@@ -43,6 +43,8 @@ x-common-settings: &common-settings
     ACESTEP_LM_BACKEND: ${ACESTEP_LM_BACKEND:-vllm}
     # Optional: CPU offloading for low VRAM systems
     ACESTEP_OFFLOAD_CPU: ${ACESTEP_OFFLOAD_CPU:-false}
+    # Optional: Multi-GPU support (auto-detected by default if multiple GPUs present)
+    ACESTEP_MULTI_GPU: ${ACESTEP_MULTI_GPU:-}
     # Optional: Skip model download (if pre-mounted)
     ACESTEP_SKIP_MODEL_DOWNLOAD: ${ACESTEP_SKIP_MODEL_DOWNLOAD:-false}
 
