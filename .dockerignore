@@ -1,0 +1,75 @@
+# =============================================================================
+# ACE-Step 1.5 Docker Ignore File
+# =============================================================================
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv
+venv
+ENV/
+env/
+.uv
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Documentation (not needed in container)
+docs/
+*.md
+!README.md
+
+# Examples (optional - can include if needed)
+# examples/
+
+# Large files that should be mounted as volumes
+checkpoints/
+.cache/
+
+# Logs
+*.log
+server.log
+nohup.out
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker files (don't include in context recursively)
+docker-compose*.yml
+Dockerfile*
+.dockerignore
+
+# Environment files (use environment variables instead)
+.env
+.env.*
+!.env.example
+
+# Keep uv.lock for reproducible builds (if it exists)
+# uv.lock

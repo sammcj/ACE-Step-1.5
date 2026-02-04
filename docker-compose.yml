@@ -1,0 +1,156 @@
+# ACE-Step 1.5 - Docker Compose Configuration
+#
+# Usage:
+#   Build and start Gradio UI:  docker compose up --build
+#   Start API server only:      docker compose up acestep-api --build
+#   Start both services:        docker compose --profile full up --build
+#   Start in background:        docker compose up -d
+#   View logs:                  docker compose logs -f
+#   Stop:                       docker compose down
+#
+# GPU Requirements:
+#   - Minimum: 4GB VRAM (with CPU offloading)
+#   - Recommended: 16GB+ VRAM for full functionality
+#   - Optimal: 24GB+ VRAM for maximum performance
+
+x-common-settings: &common-settings
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: acestep:1.5
+  # GPU configuration
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+  # Shared memory size for PyTorch DataLoader
+  shm_size: '8gb'
+  # Volume mounts
+  volumes:
+    - acestep-checkpoints:/app/checkpoints    # Model weights
+    - acestep-cache:/app/.cache               # Caches and outputs
+  # Restart policy
+  restart: unless-stopped
+  # Common environment variables
+  environment: &common-env
+    # Model configuration
+    ACESTEP_CONFIG_PATH: ${ACESTEP_CONFIG_PATH:-acestep-v15-turbo}
+    ACESTEP_LM_MODEL_PATH: ${ACESTEP_LM_MODEL_PATH:-acestep-5Hz-lm-1.7B}
+    ACESTEP_DEVICE: ${ACESTEP_DEVICE:-auto}
+    ACESTEP_LM_BACKEND: ${ACESTEP_LM_BACKEND:-vllm}
+    # Optional: CPU offloading for low VRAM systems
+    ACESTEP_OFFLOAD_CPU: ${ACESTEP_OFFLOAD_CPU:-false}
+    # Optional: Skip model download (if pre-mounted)
+    ACESTEP_SKIP_MODEL_DOWNLOAD: ${ACESTEP_SKIP_MODEL_DOWNLOAD:-false}
+
+services:
+  # ==========================================================================
+  # Gradio Web UI Service (default)
+  # ==========================================================================
+  acestep-ui:
+    <<: *common-settings
+    container_name: acestep-ui
+    ports:
+      - "${GRADIO_HOST_PORT:-7860}:7860"
+    environment:
+      <<: *common-env
+      # Gradio settings
+      GRADIO_SERVER_NAME: "0.0.0.0"
+      GRADIO_SERVER_PORT: "7860"
+      ACESTEP_UI_LANGUAGE: ${ACESTEP_UI_LANGUAGE:-en}
+      ACESTEP_ENABLE_API: "true"
+      ACESTEP_INIT_SERVICE: ${ACESTEP_INIT_SERVICE:-false}
+      # Optional: Authentication
+      ACESTEP_API_KEY: ${ACESTEP_API_KEY:-}
+      ACESTEP_AUTH_USERNAME: ${ACESTEP_AUTH_USERNAME:-}
+      ACESTEP_AUTH_PASSWORD: ${ACESTEP_AUTH_PASSWORD:-}
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:7860/"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    command: ["gradio"]
+
+  # ==========================================================================
+  # REST API Service (standalone, no profile needed)
+  # ==========================================================================
+  acestep-api:
+    <<: *common-settings
+    container_name: acestep-api
+    ports:
+      - "${API_HOST_PORT:-8001}:8001"
+    environment:
+      <<: *common-env
+      ACESTEP_API_HOST: "0.0.0.0"
+      ACESTEP_API_PORT: "8001"
+      ACESTEP_API_LOG_LEVEL: ${ACESTEP_API_LOG_LEVEL:-info}
+      ACESTEP_API_KEY: ${ACESTEP_API_KEY:-}
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    command: ["api"]
+    # Don't start by default (use: docker compose up acestep-api)
+    profiles:
+      - api
+      - full
+
+  # ==========================================================================
+  # Combined Service (both UI and API in one container)
+  # Use when you want a single container running both services
+  # ==========================================================================
+  acestep-full:
+    <<: *common-settings
+    container_name: acestep-full
+    ports:
+      - "${GRADIO_HOST_PORT:-7860}:7860"
+      - "${API_HOST_PORT:-8001}:8001"
+    environment:
+      <<: *common-env
+      # Gradio settings
+      GRADIO_SERVER_NAME: "0.0.0.0"
+      GRADIO_SERVER_PORT: "7860"
+      ACESTEP_UI_LANGUAGE: ${ACESTEP_UI_LANGUAGE:-en}
+      # API settings
+      ACESTEP_API_HOST: "0.0.0.0"
+      ACESTEP_API_PORT: "8001"
+      ACESTEP_API_LOG_LEVEL: ${ACESTEP_API_LOG_LEVEL:-info}
+      ACESTEP_API_KEY: ${ACESTEP_API_KEY:-}
+      ACESTEP_AUTH_USERNAME: ${ACESTEP_AUTH_USERNAME:-}
+      ACESTEP_AUTH_PASSWORD: ${ACESTEP_AUTH_PASSWORD:-}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:7860/ && curl -sf http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    command: ["both"]
+    # Only start with: docker compose --profile full up
+    profiles:
+      - full
+
+# =============================================================================
+# Named Volumes
+# =============================================================================
+volumes:
+  # Persistent storage for model checkpoints
+  # These are large files (several GB) and should be persisted
+  acestep-checkpoints:
+    name: acestep-checkpoints
+
+  # Cache storage for triton, huggingface, and generated audio
+  acestep-cache:
+    name: acestep-cache
+
+# =============================================================================
+# Networks (optional, for multi-container setups)
+# =============================================================================
+networks:
+  default:
+    name: acestep-network
