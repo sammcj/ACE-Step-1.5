@@ -113,8 +113,8 @@ build_gradio_args() {
 
     [ -n "$ACESTEP_CONFIG_PATH" ] && args="$args --config_path $ACESTEP_CONFIG_PATH"
     [ -n "$ACESTEP_LM_MODEL_PATH" ] && args="$args --lm_model_path $ACESTEP_LM_MODEL_PATH"
-    [ "${ACESTEP_INIT_SERVICE:-false}" = "true" ] && args="$args --init_service"
-    [ "${ACESTEP_OFFLOAD_CPU:-false}" = "true" ] && args="$args --offload_to_cpu"
+    [ "${ACESTEP_INIT_SERVICE:-false}" = "true" ] && args="$args --init_service true"
+    [ "${ACESTEP_OFFLOAD_CPU:-false}" = "true" ] && args="$args --offload_to_cpu true"
     [ "${ACESTEP_ENABLE_API:-true}" = "true" ] && args="$args --enable-api"
     [ -n "$ACESTEP_API_KEY" ] && args="$args --api-key $ACESTEP_API_KEY"
     [ -n "$ACESTEP_UI_LANGUAGE" ] && args="$args --language $ACESTEP_UI_LANGUAGE"
@@ -187,8 +187,8 @@ start_both() {
     local gradio_args="--server-name ${GRADIO_SERVER_NAME:-0.0.0.0} --port ${GRADIO_SERVER_PORT:-7860}"
     [ -n "$ACESTEP_CONFIG_PATH" ] && gradio_args="$gradio_args --config_path $ACESTEP_CONFIG_PATH"
     [ -n "$ACESTEP_LM_MODEL_PATH" ] && gradio_args="$gradio_args --lm_model_path $ACESTEP_LM_MODEL_PATH"
-    [ "${ACESTEP_INIT_SERVICE:-false}" = "true" ] && gradio_args="$gradio_args --init_service"
-    [ "${ACESTEP_OFFLOAD_CPU:-false}" = "true" ] && gradio_args="$gradio_args --offload_to_cpu"
+    [ "${ACESTEP_INIT_SERVICE:-false}" = "true" ] && gradio_args="$gradio_args --init_service true"
+    [ "${ACESTEP_OFFLOAD_CPU:-false}" = "true" ] && gradio_args="$gradio_args --offload_to_cpu true"
     [ -n "$ACESTEP_UI_LANGUAGE" ] && gradio_args="$gradio_args --language $ACESTEP_UI_LANGUAGE"
 
     if [ -n "$ACESTEP_AUTH_USERNAME" ] && [ -n "$ACESTEP_AUTH_PASSWORD" ]; then
