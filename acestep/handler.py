@@ -774,10 +774,12 @@ class AceStepHandler:
         with self._load_model_context("model"):
             quantizer = self.model.tokenizer.quantizer
             detokenizer = self.model.detokenizer
-            
+
             num_quantizers = getattr(quantizer, "num_quantizers", 1)
             # Create indices tensor: [T_5Hz]
-            indices = torch.tensor(code_ids, device=self.device, dtype=torch.long)  # [T_5Hz]
+            # For multi-GPU, get the device from the quantizer's parameters
+            quantizer_device = next(quantizer.parameters()).device if hasattr(quantizer, 'parameters') else self.device
+            indices = torch.tensor(code_ids, device=quantizer_device, dtype=torch.long)  # [T_5Hz]
             
             indices = indices.unsqueeze(0).unsqueeze(-1)  # [1, T_5Hz, 1]
             
