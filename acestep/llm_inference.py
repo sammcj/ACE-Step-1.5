@@ -404,7 +404,8 @@ class LLMHandler:
                 # Try to auto-download the model
                 logger.info(f"[initialize] LM model '{lm_model_path}' not found, attempting auto-download...")
                 try:
-                    success, msg = ensure_lm_model(lm_model_path, checkpoint_dir)
+                    from pathlib import Path
+                    success, msg = ensure_lm_model(lm_model_path, Path(checkpoint_dir))
                     if not success:
                         return f"❌ Failed to download LM model '{lm_model_path}': {msg}", False
                     logger.info(f"[initialize] {msg}")
