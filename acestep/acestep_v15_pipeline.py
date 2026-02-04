@@ -4,6 +4,7 @@ Handler wrapper connecting model and UI
 """
 import os
 import sys
+import torch
 
 # Load environment variables from .env file in project root
 # This allows configuration without hardcoding values
