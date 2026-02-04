@@ -475,7 +475,7 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
                         )
                         sequential_generation = gr.Checkbox(
                             label="Sequential Generation (Queue)",
-                            value=True,  # Default to True for stability
+                            value=False,
                             info="Generate one at a time instead of in parallel. Uses less VRAM but takes longer.",
                             interactive=not service_mode
                         )
