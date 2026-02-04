@@ -1,0 +1,31 @@
+# Development override - mount source code for fast iteration
+# This file is automatically loaded by docker compose
+# To disable, rename or delete this file
+#
+# With this file, code changes take effect immediately on container restart
+# (no rebuild needed). Just run: docker compose restart
+#
+# For production, remove or rename this file.
+
+x-dev-volumes: &dev-volumes
+  - acestep-checkpoints:/app/checkpoints
+  - acestep-cache:/app/.cache
+  # Mount individual Python files for development (preserves third_parts packages)
+  - ./acestep/handler.py:/app/acestep/handler.py:ro
+  - ./acestep/inference.py:/app/acestep/inference.py:ro
+  - ./acestep/acestep_v15_pipeline.py:/app/acestep/acestep_v15_pipeline.py:ro
+  - ./acestep/llm_inference.py:/app/acestep/llm_inference.py:ro
+  - ./acestep/api_server.py:/app/acestep/api_server.py:ro
+  - ./acestep/gpu_config.py:/app/acestep/gpu_config.py:ro
+  - ./acestep/gradio_ui:/app/acestep/gradio_ui:ro
+  - ./docker-entrypoint.sh:/usr/local/bin/docker-entrypoint.sh:ro
+
+services:
+  acestep-ui:
+    volumes: *dev-volumes
+
+  acestep-api:
+    volumes: *dev-volumes
+
+  acestep-full:
+    volumes: *dev-volumes

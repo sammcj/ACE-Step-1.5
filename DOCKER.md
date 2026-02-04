@@ -125,30 +125,32 @@ For systems with <16GB VRAM, enable CPU offloading:
 ACESTEP_OFFLOAD_CPU=true docker compose up
 ```
 
-### Multi-GPU Support
+### Multi-GPU Systems
 
-ACE-Step supports automatic model distribution across multiple GPUs using HuggingFace Accelerate's `device_map="auto"`. This is **auto-enabled** when multiple GPUs are detected.
+ACE-Step currently uses a **single GPU** for inference. Multi-GPU model splitting (`device_map="auto"`) is experimental and disabled by default due to device synchronization issues in the codebase.
 
-**How it works:**
-- Model layers are automatically distributed across available GPUs
-- Reduces per-GPU VRAM usage, allowing larger models or longer generations
-- No configuration needed - just ensure multiple GPUs are visible to Docker
+**For systems with multiple GPUs**, you can:
 
-**Manual control:**
 ```bash
-# Explicitly enable multi-GPU
-ACESTEP_MULTI_GPU=true docker compose up
-
-# Disable multi-GPU (use single GPU only)
-ACESTEP_MULTI_GPU=false docker compose up
-
-# Use a specific GPU
+# Use a specific GPU (e.g., the one with more free VRAM)
+CUDA_VISIBLE_DEVICES=0 docker compose up
 CUDA_VISIBLE_DEVICES=1 docker compose up
+
+# Enable experimental multi-GPU (may cause errors)
+ACESTEP_MULTI_GPU=true docker compose up
 ```
 
-**Example: 2x RTX 3090 (24GB each)**
-- Without multi-GPU: Limited to 24GB, may OOM on large batches
-- With multi-GPU: Model split across 48GB total, handles larger workloads
+**Memory optimization alternatives:**
+```bash
+# Enable CPU offloading (recommended for memory issues)
+ACESTEP_OFFLOAD_CPU=true docker compose up
+
+# Use smaller LM model (saves ~2-4GB VRAM)
+ACESTEP_LM_MODEL_PATH=acestep-5Hz-lm-0.6B docker compose up
+
+# Combine both
+ACESTEP_OFFLOAD_CPU=true ACESTEP_LM_MODEL_PATH=acestep-5Hz-lm-0.6B docker compose up
+```
 
 ## Volume Management
 

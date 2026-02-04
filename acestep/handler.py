@@ -785,9 +785,18 @@ class AceStepHandler:
             
             # Get quantized representation from indices
             # The quantizer expects [batch, T_5Hz] format and handles quantizer dimension internally
-            quantized = quantizer.get_output_from_indices(indices)
-            if quantized.dtype != self.dtype:
-                quantized = quantized.to(self.dtype)
+            # For multi-GPU, ensure quantizer is in the correct dtype to avoid float32/bfloat16 mismatch
+            if hasattr(quantizer, 'project_out') and quantizer.project_out.weight.dtype != torch.float32:
+                # Temporarily cast quantizer to float32 for codebook lookup, then cast result back
+                original_dtype = quantizer.project_out.weight.dtype
+                quantizer = quantizer.float()
+                quantized = quantizer.get_output_from_indices(indices)
+                quantized = quantized.to(original_dtype)
+                quantizer = quantizer.to(original_dtype)
+            else:
+                quantized = quantizer.get_output_from_indices(indices)
+                if quantized.dtype != self.dtype:
+                    quantized = quantized.to(self.dtype)
             
             # Detokenize to 25Hz: [1, T_5Hz, dim] -> [1, T_25Hz, dim]
             lm_hints_25hz = detokenizer(quantized)

@@ -44,7 +44,7 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
     # Calculate UI limits based on GPU config and LM state
     max_duration = gpu_config.max_duration_with_lm if lm_initialized else gpu_config.max_duration_without_lm
     max_batch_size = gpu_config.max_batch_size_with_lm if lm_initialized else gpu_config.max_batch_size_without_lm
-    default_batch_size = min(2, max_batch_size)  # Default to 2 or max if lower
+    default_batch_size = min(1, max_batch_size)  # Default to 1 for stability
     init_lm_default = gpu_config.init_lm_default
     
     with gr.Group():

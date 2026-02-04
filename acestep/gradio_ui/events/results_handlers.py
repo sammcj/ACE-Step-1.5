@@ -647,7 +647,7 @@ def generate_with_progress(
     # Clear lrc_display with empty string - this triggers .change() to clear subtitles
     clear_lrcs = [gr.update(value="", visible=True) for _ in range(8)]
     clear_accordions = [gr.skip() for _ in range(8)]  # Don't change accordion visibility
-    dump_audio = [gr.update(value=None, subtitles=None) for _ in range(8)]
+    dump_audio = [gr.update(value=None) for _ in range(8)]
     yield (
         # Audio outputs - just skip, value will be updated in loop
         # Subtitles will be cleared via lrc_display.change()
@@ -908,12 +908,10 @@ def generate_with_progress(
     # The lrc_display was already updated in the loop yields above.
     # lrc_display.change() event will automatically update the audio subtitles.
     # This decouples audio value updates from subtitle updates, avoiding flickering.
-    audio_playback_updates = [gr.update(playback_position=0) for _ in range(8)]
+    # NOTE: Use gr.skip() instead of gr.update(playback_position=0) to avoid overwriting audio values
     yield (
-        # Audio - just skip, subtitles are updated via lrc_display.change()
-        # gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(),
-        audio_playback_updates[0], audio_playback_updates[1], audio_playback_updates[2], audio_playback_updates[3],
-        audio_playback_updates[4], audio_playback_updates[5], audio_playback_updates[6], audio_playback_updates[7],
+        # Audio - skip to preserve values set in loop
+        gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(),
         all_audio_paths,
         generation_info,
         "Generation Complete",
@@ -1745,7 +1743,7 @@ def generate_next_batch_background(
         params.setdefault("seed", "-1")
         params.setdefault("reference_audio", None)
         params.setdefault("audio_duration", -1)
-        params.setdefault("batch_size_input", 2)
+        params.setdefault("batch_size_input", 1)
         params.setdefault("src_audio", None)
         params.setdefault("text2music_audio_code_string", "")
         params.setdefault("repainting_start", 0.0)

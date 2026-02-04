@@ -215,13 +215,16 @@ def main():
             if use_flash_attention is None:
                 use_flash_attention = dit_handler.is_flash_attention_available()
 
-            # Auto-detect multi-GPU: enable if multiple GPUs available and not explicitly disabled
+            # Multi-GPU support: disabled by default due to device mismatch issues
+            # The codebase would need significant refactoring to properly support device_map="auto"
+            # For now, recommend using CPU offloading or smaller models for memory constraints
             multi_gpu = args.multi_gpu
-            if multi_gpu is None and torch.cuda.is_available():
+            if multi_gpu is None:
+                multi_gpu = False
+            if multi_gpu and torch.cuda.is_available():
                 num_gpus = torch.cuda.device_count()
                 if num_gpus > 1:
-                    multi_gpu = True
-                    print(f"Multi-GPU auto-enabled: {num_gpus} GPUs detected")
+                    print(f"WARNING: Multi-GPU enabled ({num_gpus} GPUs) - this is experimental and may cause errors")
                 else:
                     multi_gpu = False
 
