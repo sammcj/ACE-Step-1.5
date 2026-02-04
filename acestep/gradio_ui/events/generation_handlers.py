@@ -1011,7 +1011,7 @@ def handle_format_sample(
     # Clamp duration to GPU memory limit
     clamped_duration = clamp_duration_to_gpu_limit(result.duration, llm_handler)
     audio_duration_value = clamped_duration if clamped_duration and clamped_duration > 0 else -1
-    
+
     return (
         result.caption,  # captions
         result.lyrics,  # lyrics
@@ -1022,5 +1022,166 @@ def handle_format_sample(
         result.timesignature,  # time_signature
         True,  # is_format_caption_state - True (LM-formatted)
         result.status_message,  # status_output
+    )
+
+
+# ========== Model Switching Handlers ==========
+
+def switch_models_wrapper(
+    dit_handler, llm_handler,
+    new_dit_model: str,
+    new_lm_model: str,
+    checkpoint_dropdown_value: str,
+    device_value: str,
+    use_flash_attention: bool,
+    offload_to_cpu: bool,
+    offload_dit_to_cpu: bool,
+    compile_model: bool,
+    quantization: bool,
+    backend: str,
+):
+    """
+    Switch to different DiT and/or LM models.
+
+    Args:
+        dit_handler: DiT handler instance
+        llm_handler: LLM handler instance
+        new_dit_model: New DiT model to load
+        new_lm_model: New LM model to load (or "None (DiT only)" to disable)
+        checkpoint_dropdown_value: Checkpoint directory
+        device_value: Device to use
+        use_flash_attention: Whether to use flash attention
+        offload_to_cpu: Whether to offload to CPU
+        offload_dit_to_cpu: Whether to offload DiT to CPU
+        compile_model: Whether to compile the model
+        quantization: Whether to use quantization
+        backend: LM backend to use
+
+    Returns:
+        Tuple of (status_message, model_status_display, generate_btn_state, model_type_settings...)
+    """
+    import torch
+
+    status_messages = []
+
+    # Get current models
+    current_dit = dit_handler.get_current_model_name() if hasattr(dit_handler, 'get_current_model_name') else None
+    current_lm = llm_handler.get_current_model_name() if hasattr(llm_handler, 'get_current_model_name') else None
+
+    # Determine if LM should be loaded
+    load_lm = new_lm_model and new_lm_model != "None (DiT only)"
+
+    # Check if we need to switch DiT model
+    dit_changed = new_dit_model and new_dit_model != current_dit
+
+    # Check if we need to switch LM model
+    lm_changed = (load_lm and new_lm_model != current_lm) or (not load_lm and current_lm and current_lm != "None")
+
+    if not dit_changed and not lm_changed:
+        return (
+            "⚠️ No model changes needed - same models already loaded.",
+            f"DiT: {current_dit}\nLM: {current_lm if current_lm else 'None'}",
+            gr.update(),  # generate_btn unchanged
+            gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),  # model settings unchanged
+        )
+
+    # Unload LM first if changing or disabling it (to free memory)
+    if lm_changed and current_lm and current_lm != "None":
+        unload_msg = llm_handler.unload()
+        status_messages.append(f"LM: {unload_msg}")
+
+    # Unload DiT if changing it
+    if dit_changed and current_dit and current_dit != "None":
+        unload_msg = dit_handler.unload_model()
+        status_messages.append(f"DiT: {unload_msg}")
+
+    # Clear CUDA cache between unload and load
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+
+    # Load new DiT model
+    enable_generate = False
+    if dit_changed:
+        quant_value = "int8_weight_only" if quantization else None
+        dit_status, dit_success = dit_handler.initialize_service(
+            checkpoint_dropdown_value, new_dit_model, device_value,
+            use_flash_attention=use_flash_attention, compile_model=compile_model,
+            offload_to_cpu=offload_to_cpu, offload_dit_to_cpu=offload_dit_to_cpu,
+            quantization=quant_value
+        )
+        status_messages.append(f"DiT: {dit_status}")
+        enable_generate = dit_success
+    else:
+        # DiT didn't change, keep it enabled if it was loaded
+        enable_generate = dit_handler.model is not None
+
+    # Load new LM model if requested
+    if load_lm and (lm_changed or not llm_handler.llm_initialized):
+        # Get checkpoint directory
+        current_file = os.path.abspath(__file__)
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_file))))
+        checkpoint_dir = os.path.join(project_root, "checkpoints")
+
+        lm_status, lm_success = llm_handler.initialize(
+            checkpoint_dir=checkpoint_dir,
+            lm_model_path=new_lm_model,
+            backend=backend,
+            device=device_value,
+            offload_to_cpu=offload_to_cpu,
+            dtype=dit_handler.dtype if dit_handler.dtype else None
+        )
+        status_messages.append(f"LM: {lm_status}")
+    elif not load_lm and lm_changed:
+        status_messages.append("LM: Disabled (DiT only mode)")
+
+    # Get updated model names
+    final_dit = dit_handler.get_current_model_name() if hasattr(dit_handler, 'get_current_model_name') else "Unknown"
+    final_lm = llm_handler.get_current_model_name() if hasattr(llm_handler, 'get_current_model_name') else "None"
+
+    # Get model type settings for the new DiT model
+    is_turbo = dit_handler.is_turbo_model() if hasattr(dit_handler, 'is_turbo_model') else False
+    model_type_settings = get_model_type_ui_settings(is_turbo)
+
+    return (
+        "\n".join(status_messages),
+        f"DiT: {final_dit}\nLM: {final_lm}",
+        gr.update(interactive=enable_generate),
+        *model_type_settings
+    )
+
+
+def refresh_model_lists(dit_handler, llm_handler):
+    """Refresh the available model lists and current status."""
+    # Full list of official models (downloaded + downloadable)
+    ALL_DIT_MODELS = [
+        "acestep-v15-turbo",
+        "acestep-v15-turbo-shift1",
+        "acestep-v15-turbo-shift3",
+        "acestep-v15-turbo-continuous",
+        "acestep-v15-base",
+        "acestep-v15-sft",
+    ]
+    ALL_LM_MODELS = [
+        "acestep-5Hz-lm-0.6B",
+        "acestep-5Hz-lm-1.7B",
+        "acestep-5Hz-lm-4B",
+    ]
+
+    # Merge with any locally downloaded models
+    downloaded_dit = dit_handler.get_available_acestep_v15_models()
+    downloaded_lm = llm_handler.get_available_5hz_lm_models()
+
+    all_dit_choices = list(dict.fromkeys(ALL_DIT_MODELS + downloaded_dit))
+    all_lm_choices = ["None (DiT only)"] + list(dict.fromkeys(ALL_LM_MODELS + downloaded_lm))
+
+    # Get current models
+    current_dit = dit_handler.get_current_model_name() if hasattr(dit_handler, 'get_current_model_name') else "Unknown"
+    current_lm = llm_handler.get_current_model_name() if hasattr(llm_handler, 'get_current_model_name') else "None"
+
+    return (
+        gr.update(choices=all_dit_choices, value=current_dit if current_dit in all_dit_choices else None),
+        gr.update(choices=all_lm_choices, value=current_lm if current_lm in all_lm_choices else "None (DiT only)"),
+        f"DiT: {current_dit}\nLM: {current_lm}",
     )
 

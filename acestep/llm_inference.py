@@ -21,6 +21,7 @@ from transformers.generation.logits_process import (
 from acestep.constrained_logits_processor import MetadataConstrainedLogitsProcessor
 from acestep.constants import DEFAULT_LM_INSTRUCTION, DEFAULT_LM_UNDERSTAND_INSTRUCTION, DEFAULT_LM_INSPIRED_INSTRUCTION, DEFAULT_LM_REWRITE_INSTRUCTION
 from acestep.gpu_config import get_lm_gpu_memory_ratio, get_gpu_memory_gb, get_lm_model_size, get_global_gpu_config
+from acestep.model_downloader import ensure_lm_model
 
 
 class LLMHandler:
@@ -41,6 +42,7 @@ class LLMHandler:
         self.device = "cpu"
         self.dtype = torch.float32
         self.offload_to_cpu = False
+        self.current_lm_model_path = None  # Track currently loaded LM model
 
         # HuggingFace Space persistent storage support
         if persistent_storage_path is None and self.IS_HUGGINGFACE_SPACE:
@@ -74,7 +76,56 @@ class LLMHandler:
 
         models.sort()
         return models
-    
+
+    def unload(self) -> str:
+        """Unload the current LM model to free GPU memory.
+
+        Returns:
+            Status message
+        """
+        if not self.llm_initialized:
+            return "⚠️ No LM model loaded."
+
+        try:
+            # Delete model and tokenizer
+            if self.llm is not None:
+                del self.llm
+                self.llm = None
+
+            if self.llm_tokenizer is not None:
+                del self.llm_tokenizer
+                self.llm_tokenizer = None
+
+            if self._hf_model_for_scoring is not None:
+                del self._hf_model_for_scoring
+                self._hf_model_for_scoring = None
+
+            self.llm_initialized = False
+            self.current_lm_model_path = None
+
+            # Clear CUDA cache
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+
+            import gc
+            gc.collect()
+
+            logger.info("LM model unloaded successfully")
+            return "✅ LM model unloaded"
+
+        except Exception as e:
+            logger.exception("Failed to unload LM model")
+            return f"❌ Failed to unload LM: {str(e)}"
+
+    def get_current_model_name(self) -> str:
+        """Get the name of the currently loaded LM model.
+
+        Returns:
+            Model name or 'None' if no model is loaded
+        """
+        return self.current_lm_model_path if self.current_lm_model_path else "None"
+
     def get_gpu_memory_utilization(self, model_path: str = None, minimal_gpu: float = 8, min_ratio: float = 0.2, max_ratio: float = 0.9) -> Tuple[float, bool]:
         """
         Get GPU memory utilization ratio based on LM model size and available GPU memory.
@@ -350,8 +401,16 @@ class LLMHandler:
 
             full_lm_model_path = os.path.join(checkpoint_dir, lm_model_path)
             if not os.path.exists(full_lm_model_path):
-                return f"❌ 5Hz LM model not found at {full_lm_model_path}", False
-            
+                # Try to auto-download the model
+                logger.info(f"[initialize] LM model '{lm_model_path}' not found, attempting auto-download...")
+                try:
+                    success, msg = ensure_lm_model(lm_model_path, checkpoint_dir)
+                    if not success:
+                        return f"❌ Failed to download LM model '{lm_model_path}': {msg}", False
+                    logger.info(f"[initialize] {msg}")
+                except Exception as e:
+                    return f"❌ Failed to download LM model '{lm_model_path}': {str(e)}", False
+
             logger.info("loading 5Hz LM tokenizer... it may take 80~90s")
             start_time = time.time()
             # TODO: load tokenizer too slow, not found solution yet
@@ -397,7 +456,9 @@ class LLMHandler:
                 success, status_msg = self._load_pytorch_model(full_lm_model_path, device)
                 if not success:
                     return status_msg, False
-            
+
+            # Track the loaded model name
+            self.current_lm_model_path = lm_model_path
             return status_msg, True
             
         except Exception as e:

@@ -103,7 +103,46 @@ def setup_event_handlers(demo, dit_handler, llm_handler, dataset_handler, datase
         inputs=[generation_section["lora_scale_slider"]],
         outputs=[generation_section["lora_status"]]
     )
-    
+
+    # ========== Model Switching Handlers ==========
+    generation_section["switch_models_btn"].click(
+        fn=lambda *args: gen_h.switch_models_wrapper(dit_handler, llm_handler, *args),
+        inputs=[
+            generation_section["switch_dit_dropdown"],
+            generation_section["switch_lm_dropdown"],
+            generation_section["checkpoint_dropdown"],
+            generation_section["device"],
+            generation_section["use_flash_attention_checkbox"],
+            generation_section["offload_to_cpu_checkbox"],
+            generation_section["offload_dit_to_cpu_checkbox"],
+            generation_section["compile_model_checkbox"],
+            generation_section["quantization_checkbox"],
+            generation_section["backend_dropdown"],
+        ],
+        outputs=[
+            generation_section["switch_status"],
+            generation_section["model_status_display"],
+            generation_section["generate_btn"],
+            # Model type settings (updated based on new model)
+            generation_section["inference_steps"],
+            generation_section["guidance_scale"],
+            generation_section["use_adg"],
+            generation_section["shift"],
+            generation_section["cfg_interval_start"],
+            generation_section["cfg_interval_end"],
+            generation_section["task_type"],
+        ]
+    )
+
+    generation_section["refresh_models_btn"].click(
+        fn=lambda: gen_h.refresh_model_lists(dit_handler, llm_handler),
+        outputs=[
+            generation_section["switch_dit_dropdown"],
+            generation_section["switch_lm_dropdown"],
+            generation_section["model_status_display"],
+        ]
+    )
+
     # ========== UI Visibility Updates ==========
     generation_section["init_llm_checkbox"].change(
         fn=gen_h.update_negative_prompt_visibility,

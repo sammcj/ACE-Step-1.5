@@ -210,7 +210,131 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
                     interactive=False,
                     scale=2,
                 )
-        
+
+        # Model Selection Section - Always visible for switching models
+        with gr.Accordion("🔄 Model Selection", open=True) as model_selection_accordion:
+            # Current model status
+            current_dit_name = dit_handler.get_current_model_name() if hasattr(dit_handler, 'get_current_model_name') else "Unknown"
+            current_lm_name = llm_handler.get_current_model_name() if hasattr(llm_handler, 'get_current_model_name') else "Unknown"
+
+            with gr.Row():
+                model_status_display = gr.Textbox(
+                    label="Current Models",
+                    value=f"DiT: {current_dit_name}\nLM: {current_lm_name}",
+                    interactive=False,
+                    lines=2,
+                )
+
+            with gr.Row():
+                # DiT model selection - include all available models (downloaded + downloadable)
+                # Full list of official DiT models from ACE-Step
+                ALL_DIT_MODELS = [
+                    "acestep-v15-turbo",           # Default turbo (8 steps, fast)
+                    "acestep-v15-turbo-shift1",    # Turbo with shift1
+                    "acestep-v15-turbo-shift3",    # Turbo with shift3
+                    "acestep-v15-turbo-continuous", # Turbo with continuous shift (1-5)
+                    "acestep-v15-base",            # Base model (50 steps, high diversity)
+                    "acestep-v15-sft",             # SFT model (50 steps, high quality)
+                ]
+                # Add any locally downloaded models that might not be in the official list
+                downloaded_dit_models = dit_handler.get_available_acestep_v15_models()
+                all_dit_choices = list(dict.fromkeys(ALL_DIT_MODELS + downloaded_dit_models))  # Dedupe, preserve order
+
+                current_dit = dit_handler.get_current_model_name() if hasattr(dit_handler, 'get_current_model_name') else None
+                default_dit = current_dit if current_dit and current_dit in all_dit_choices else "acestep-v15-turbo"
+
+                switch_dit_dropdown = gr.Dropdown(
+                    label="DiT Model",
+                    choices=all_dit_choices,
+                    value=default_dit,
+                    info="turbo=8 steps (fast), base/sft=50 steps (quality). Will auto-download if needed.",
+                )
+
+                # LM model selection with "None" option - include all available models
+                # Full list of official LM models from ACE-Step
+                ALL_LM_MODELS = [
+                    "acestep-5Hz-lm-0.6B",   # Lightweight (6-12GB VRAM)
+                    "acestep-5Hz-lm-1.7B",   # Balanced (12-16GB VRAM) - default
+                    "acestep-5Hz-lm-4B",     # Best quality (16GB+ VRAM)
+                ]
+                # Add any locally downloaded models
+                downloaded_lm_models = llm_handler.get_available_5hz_lm_models()
+                all_lm_models = list(dict.fromkeys(ALL_LM_MODELS + downloaded_lm_models))  # Dedupe
+                lm_choices = ["None (DiT only)"] + all_lm_models
+
+                current_lm = llm_handler.get_current_model_name() if hasattr(llm_handler, 'get_current_model_name') else None
+                default_lm = current_lm if current_lm and current_lm in all_lm_models else (
+                    "acestep-5Hz-lm-1.7B" if "acestep-5Hz-lm-1.7B" in all_lm_models else
+                    (all_lm_models[0] if all_lm_models else "None (DiT only)")
+                )
+                switch_lm_dropdown = gr.Dropdown(
+                    label="LM Model",
+                    choices=lm_choices,
+                    value=default_lm,
+                    info="0.6B=6-12GB, 1.7B=12-16GB, 4B=16GB+. Will auto-download if needed.",
+                )
+
+            with gr.Row():
+                switch_models_btn = gr.Button("🔄 Switch Models", variant="primary", size="lg")
+                refresh_models_btn = gr.Button("🔃 Refresh List", variant="secondary", size="sm")
+
+            switch_status = gr.Textbox(
+                label="Switch Status",
+                value="",
+                interactive=False,
+                lines=2,
+            )
+
+            # Model comparison tables in a collapsed accordion
+            with gr.Accordion("📊 Model Comparison Guide", open=False):
+                gr.Markdown("""
+### VRAM Requirements
+
+| Your GPU VRAM | Recommended LM Model | Notes |
+|---------------|---------------------|-------|
+| ≤6GB | None (DiT only) | LM disabled to save memory |
+| 6-12GB | `acestep-5Hz-lm-0.6B` | Lightweight, good balance |
+| 12-16GB | `acestep-5Hz-lm-1.7B` | Better quality (default) |
+| ≥16GB | `acestep-5Hz-lm-4B` | Best quality and audio understanding |
+
+---
+
+### DiT Models (Diffusion Transformer)
+
+| Model | CFG | Steps | Refer Audio | Quality | Diversity | Speed |
+|-------|-----|-------|-------------|---------|-----------|-------|
+| `acestep-v15-turbo` | ❌ | 8 | ✅ | ⭐⭐⭐⭐ Very High | ⭐⭐⭐ Medium | 🚀 Fast |
+| `acestep-v15-turbo-shift1` | ❌ | 8 | ✅ | ⭐⭐⭐⭐ Very High | ⭐⭐⭐ Medium | 🚀 Fast |
+| `acestep-v15-turbo-shift3` | ❌ | 8 | ✅ | ⭐⭐⭐⭐ Very High | ⭐⭐⭐ Medium | 🚀 Fast |
+| `acestep-v15-turbo-continuous` | ❌ | 8 | ✅ | ⭐⭐⭐⭐ Very High | ⭐⭐⭐ Medium | 🚀 Fast |
+| `acestep-v15-sft` | ✅ | 50 | ✅ | ⭐⭐⭐⭐ High | ⭐⭐⭐ Medium | 🐢 Slow |
+| `acestep-v15-base` | ✅ | 50 | ✅ | ⭐⭐⭐ Medium | ⭐⭐⭐⭐ High | 🐢 Slow |
+
+**Turbo variants:** Fast generation (8 steps), no CFG needed, best for most use cases.
+- `shift1/shift3`: Fixed shift values for consistent results
+- `continuous`: Variable shift (1-5) for more control
+
+**Base/SFT:** Slower (50 steps) but support CFG for finer control. Base has higher diversity, SFT has higher quality.
+
+---
+
+### LM Models (Language Model)
+
+| Model | VRAM | Audio Understanding | Composition | Copy Melody | CoT Metas |
+|-------|------|---------------------|-------------|-------------|-----------|
+| `acestep-5Hz-lm-0.6B` | 6-12GB | ⭐⭐ Medium | ⭐⭐ Medium | ⭐ Weak | ✅ |
+| `acestep-5Hz-lm-1.7B` | 12-16GB | ⭐⭐ Medium | ⭐⭐ Medium | ⭐⭐ Medium | ✅ |
+| `acestep-5Hz-lm-4B` | 16GB+ | ⭐⭐⭐ Strong | ⭐⭐⭐ Strong | ⭐⭐⭐ Strong | ✅ |
+
+**LM Features:**
+- **Audio Understanding**: Analyze reference audio to extract style/mood
+- **Composition**: Generate coherent musical structures
+- **Copy Melody**: Replicate melodic patterns from reference
+- **CoT Metas**: Chain-of-thought metadata generation (BPM, key, etc.)
+
+**None (DiT only)**: Fastest generation, lowest VRAM, but no AI-enhanced metadata or audio understanding.
+                """)
+
         # Inputs
         with gr.Row():
             with gr.Column(scale=2):
@@ -741,6 +865,14 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
         "use_lora_checkbox": use_lora_checkbox,
         "lora_scale_slider": lora_scale_slider,
         "lora_status": lora_status,
+        # Model Selection components
+        "model_selection_accordion": model_selection_accordion,
+        "model_status_display": model_status_display,
+        "switch_dit_dropdown": switch_dit_dropdown,
+        "switch_lm_dropdown": switch_lm_dropdown,
+        "switch_models_btn": switch_models_btn,
+        "refresh_models_btn": refresh_models_btn,
+        "switch_status": switch_status,
         "task_type": task_type,
         "instruction_display_gen": instruction_display_gen,
         "track_name": track_name,

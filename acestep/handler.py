@@ -57,6 +57,7 @@ class AceStepHandler:
         self.config = None
         self.device = "cpu"
         self.dtype = torch.float32  # Will be set based on device in initialize_service
+        self.current_config_path = None  # Track currently loaded model name
 
         # VAE for audio encoding/decoding
         self.vae = None
@@ -223,7 +224,50 @@ class AceStepHandler:
         except Exception as e:
             logger.exception("Failed to unload LoRA")
             return f"❌ Failed to unload LoRA: {str(e)}"
-    
+
+    def unload_model(self) -> str:
+        """Unload the current DiT model to free GPU memory.
+
+        Returns:
+            Status message
+        """
+        if self.model is None:
+            return "⚠️ No model loaded."
+
+        try:
+            # Unload LoRA first if loaded
+            if self.lora_loaded:
+                self.unload_lora()
+
+            # Delete model and clear references
+            del self.model
+            self.model = None
+            self._base_decoder = None
+            self.current_config_path = None
+
+            # Clear CUDA cache
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+
+            import gc
+            gc.collect()
+
+            logger.info("DiT model unloaded successfully")
+            return "✅ DiT model unloaded"
+
+        except Exception as e:
+            logger.exception("Failed to unload model")
+            return f"❌ Failed to unload model: {str(e)}"
+
+    def get_current_model_name(self) -> str:
+        """Get the name of the currently loaded DiT model.
+
+        Returns:
+            Model name or 'None' if no model is loaded
+        """
+        return self.current_config_path if self.current_config_path else "None"
+
     def set_use_lora(self, use_lora: bool) -> str:
         """Toggle LoRA usage for inference.
         
@@ -452,7 +496,8 @@ class AceStepHandler:
                     logger.info(f"[initialize_service] Model distributed across GPUs: {self.model.hf_device_map if hasattr(self.model, 'hf_device_map') else 'auto'}")
 
                 self.model.eval()
-                
+                self.current_config_path = config_path  # Track loaded model name
+
                 if compile_model:
                     # Add __len__ method to model to support torch.compile
                     # torch.compile's dynamo requires this method for introspection
