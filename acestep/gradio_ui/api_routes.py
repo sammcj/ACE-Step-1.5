@@ -459,6 +459,7 @@ async def release_task(request: Request, authorization: Optional[str] = Header(N
 
         config = GenerationConfig(
             batch_size=get_param("batch_size", default=1),
+            sequential_generation=get_param("sequential_generation", default=True),
             use_random_seed=get_param("use_random_seed", default=True),
             audio_format=get_param("audio_format", default="mp3"),
         )

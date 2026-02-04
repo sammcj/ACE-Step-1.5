@@ -776,28 +776,75 @@ class AceStepHandler:
             detokenizer = self.model.detokenizer
 
             num_quantizers = getattr(quantizer, "num_quantizers", 1)
+
+            # Get codebook size for bounds checking
+            codebook_size = None
+            if hasattr(quantizer, 'bins'):
+                codebook_size = quantizer.bins
+            elif hasattr(quantizer, 'codebook_size'):
+                codebook_size = quantizer.codebook_size
+            elif hasattr(quantizer, 'n_codes'):
+                codebook_size = quantizer.n_codes
+            elif hasattr(quantizer, 'num_embeddings'):
+                codebook_size = quantizer.num_embeddings
+            elif hasattr(quantizer, 'vq') and hasattr(quantizer.vq, 'codebook'):
+                # Try to infer from codebook shape
+                codebook_size = quantizer.vq.codebook.shape[0]
+
+            # Filter out-of-bounds indices to prevent CUDA assertion failures
+            valid_code_ids = code_ids
+            if codebook_size is not None:
+                out_of_bounds = [c for c in code_ids if c < 0 or c >= codebook_size]
+                if out_of_bounds:
+                    logger.warning(
+                        f"[_decode_audio_codes_to_latents] Found {len(out_of_bounds)} audio codes out of bounds "
+                        f"(codebook size={codebook_size}, max code={max(out_of_bounds)}). Filtering them out."
+                    )
+                    valid_code_ids = [c for c in code_ids if 0 <= c < codebook_size]
+                    if len(valid_code_ids) == 0:
+                        logger.warning("[_decode_audio_codes_to_latents] All audio codes were out of bounds, skipping reference audio.")
+                        return None
+            else:
+                # If we can't determine codebook size, at least check for obviously invalid values
+                # Most audio quantizers use codebook sizes <= 65536
+                MAX_REASONABLE_CODE = 65536
+                out_of_bounds = [c for c in code_ids if c < 0 or c >= MAX_REASONABLE_CODE]
+                if out_of_bounds:
+                    logger.warning(
+                        f"[_decode_audio_codes_to_latents] Found {len(out_of_bounds)} potentially invalid audio codes "
+                        f"(max code={max(out_of_bounds)}). Clamping to range [0, {MAX_REASONABLE_CODE-1}]."
+                    )
+                    valid_code_ids = [max(0, min(c, MAX_REASONABLE_CODE - 1)) for c in code_ids]
+
             # Create indices tensor: [T_5Hz]
             # For multi-GPU, get the device from the quantizer's parameters
             quantizer_device = next(quantizer.parameters()).device if hasattr(quantizer, 'parameters') else self.device
-            indices = torch.tensor(code_ids, device=quantizer_device, dtype=torch.long)  # [T_5Hz]
-            
+            indices = torch.tensor(valid_code_ids, device=quantizer_device, dtype=torch.long)  # [T_5Hz]
+
             indices = indices.unsqueeze(0).unsqueeze(-1)  # [1, T_5Hz, 1]
-            
+
             # Get quantized representation from indices
             # The quantizer expects [batch, T_5Hz] format and handles quantizer dimension internally
             # For multi-GPU, ensure quantizer is in the correct dtype to avoid float32/bfloat16 mismatch
-            if hasattr(quantizer, 'project_out') and quantizer.project_out.weight.dtype != torch.float32:
-                # Temporarily cast quantizer to float32 for codebook lookup, then cast result back
-                original_dtype = quantizer.project_out.weight.dtype
-                quantizer = quantizer.float()
-                quantized = quantizer.get_output_from_indices(indices)
-                quantized = quantized.to(original_dtype)
-                quantizer = quantizer.to(original_dtype)
-            else:
-                quantized = quantizer.get_output_from_indices(indices)
-                if quantized.dtype != self.dtype:
-                    quantized = quantized.to(self.dtype)
-            
+            try:
+                if hasattr(quantizer, 'project_out') and quantizer.project_out.weight.dtype != torch.float32:
+                    # Temporarily cast quantizer to float32 for codebook lookup, then cast result back
+                    original_dtype = quantizer.project_out.weight.dtype
+                    quantizer = quantizer.float()
+                    quantized = quantizer.get_output_from_indices(indices)
+                    quantized = quantized.to(original_dtype)
+                    quantizer = quantizer.to(original_dtype)
+                else:
+                    quantized = quantizer.get_output_from_indices(indices)
+                    if quantized.dtype != self.dtype:
+                        quantized = quantized.to(self.dtype)
+            except (RuntimeError, IndexError) as e:
+                logger.warning(
+                    f"[_decode_audio_codes_to_latents] Failed to decode audio codes: {e}. "
+                    "This may be due to invalid audio code indices. Skipping reference audio."
+                )
+                return None
+
             # Detokenize to 25Hz: [1, T_5Hz, dim] -> [1, T_25Hz, dim]
             lm_hints_25hz = detokenizer(quantized)
             return lm_hints_25hz

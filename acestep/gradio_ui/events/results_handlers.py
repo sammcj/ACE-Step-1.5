@@ -466,7 +466,7 @@ def generate_with_progress(
     dit_handler, llm_handler,
     captions, lyrics, bpm, key_scale, time_signature, vocal_language,
     inference_steps, guidance_scale, random_seed_checkbox, seed,
-    reference_audio, audio_duration, batch_size_input, src_audio,
+    reference_audio, audio_duration, batch_size_input, sequential_generation, src_audio,
     text2music_audio_code_string, repainting_start, repainting_end,
     instruction_display_gen, audio_cover_strength, task_type,
     use_adg, cfg_interval_start, cfg_interval_end, shift, infer_method, custom_timesteps, audio_format, lm_temperature,
@@ -569,12 +569,15 @@ def generate_with_progress(
             seed_list = [int(seed.strip())]
     else:
         seed_list = None
+    # Validate lm_batch_chunk_size (Gradio may pass {} on error)
+    validated_chunk_size = lm_batch_chunk_size if isinstance(lm_batch_chunk_size, (int, float)) else 8
     gen_config = GenerationConfig(
         batch_size=batch_size_input,
+        sequential_generation=sequential_generation,
         allow_lm_batch=allow_lm_batch,
         use_random_seed=random_seed_checkbox,
         seeds=seed_list,
-        lm_batch_chunk_size=lm_batch_chunk_size,
+        lm_batch_chunk_size=int(validated_chunk_size),
         constrained_decoding_debug=constrained_decoding_debug,
         audio_format=audio_format,
     )
@@ -799,7 +802,8 @@ def generate_with_progress(
             # First, update audio and clear LRC to avoid race condition
             # (audio needs to load before subtitles are set via .change() event)
             current_audio_updates = [gr.skip() for _ in range(8)]
-            current_audio_updates[i] = audio_path
+            # Reset playback to start when setting new audio
+            current_audio_updates[i] = gr.update(value=audio_path, autoplay=False)
             
             codes_display_updates = [gr.skip() for _ in range(8)]
             codes_display_updates[i] = gr.update(value=code_str, visible=True)  # Keep visible=True
@@ -1744,6 +1748,7 @@ def generate_next_batch_background(
         params.setdefault("reference_audio", None)
         params.setdefault("audio_duration", -1)
         params.setdefault("batch_size_input", 1)
+        params.setdefault("sequential_generation", True)
         params.setdefault("src_audio", None)
         params.setdefault("text2music_audio_code_string", "")
         params.setdefault("repainting_start", 0.0)
@@ -1984,10 +1989,11 @@ def navigate_to_previous_batch(current_batch_index, batch_queue):
     for idx in range(8):
         if idx < len(real_audio_paths):
             audio_path = real_audio_paths[idx]
-            audio_updates.append(gr.update(value=audio_path))
+            # Reset playback to start when loading audio
+            audio_updates.append(gr.update(value=audio_path, autoplay=False))
         else:
             audio_updates.append(gr.update(value=None))
-    
+
     # Update batch indicator
     total_batches = len(batch_queue)
     batch_indicator_text = update_batch_indicator(new_batch_index, total_batches)
@@ -2107,10 +2113,11 @@ def navigate_to_next_batch(autogen_enabled, current_batch_index, total_batches, 
     for idx in range(8):
         if idx < len(real_audio_paths):
             audio_path = real_audio_paths[idx]
-            audio_updates.append(gr.update(value=audio_path))
+            # Reset playback to start when loading audio
+            audio_updates.append(gr.update(value=audio_path, autoplay=False))
         else:
             audio_updates.append(gr.update(value=None))
-    
+
     # Update batch indicator
     batch_indicator_text = update_batch_indicator(new_batch_index, total_batches)
     

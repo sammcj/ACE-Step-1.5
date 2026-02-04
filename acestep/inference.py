@@ -151,9 +151,11 @@ class GenerationParams:
 @dataclass
 class GenerationConfig:
     """Configuration for music generation.
-    
+
     Attributes:
         batch_size: Number of audio samples to generate
+        sequential_generation: If True, generate items one at a time instead of in parallel.
+            This uses less VRAM but takes longer. Useful for multi-GPU systems or low VRAM.
         allow_lm_batch: Whether to allow batch processing in LM
         use_random_seed: Whether to use random seed
         seeds: Seed(s) for batch generation. Can be:
@@ -164,7 +166,8 @@ class GenerationConfig:
         constrained_decoding_debug: Whether to enable constrained decoding debug
         audio_format: Output audio format, one of "mp3", "wav", "flac". Default: "flac"
     """
-    batch_size: int = 2
+    batch_size: int = 1
+    sequential_generation: bool = False
     allow_lm_batch: bool = False
     use_random_seed: bool = True
     seeds: Optional[List[int]] = None
@@ -430,7 +433,11 @@ def generate_music(
             infer_type = "llm_dit" if need_audio_codes and params.thinking else "dit"
 
             # Use chunk size from config, or default to batch_size if not set
-            max_inference_batch_size = int(config.lm_batch_chunk_size) if config.lm_batch_chunk_size > 0 else actual_batch_size
+            # Handle edge case where lm_batch_chunk_size may be an invalid type (e.g., empty dict from Gradio)
+            chunk_size_val = config.lm_batch_chunk_size
+            if not isinstance(chunk_size_val, (int, float)) or chunk_size_val <= 0:
+                chunk_size_val = 8  # Default value
+            max_inference_batch_size = int(chunk_size_val) if chunk_size_val > 0 else actual_batch_size
             num_chunks = math.ceil(actual_batch_size / max_inference_batch_size)
 
             all_metadata_list = []
@@ -554,50 +561,118 @@ def generate_music(
 
         # Phase 2: DiT music generation
         # Use seed_for_generation (from config.seed or params.seed) instead of params.seed for actual generation
-        result = dit_handler.generate_music(
-            captions=dit_input_caption,
-            lyrics=dit_input_lyrics,
-            bpm=bpm,
-            key_scale=key_scale,
-            time_signature=time_signature,
-            vocal_language=dit_input_vocal_language,
-            inference_steps=params.inference_steps,
-            guidance_scale=params.guidance_scale,
-            use_random_seed=config.use_random_seed,
-            seed=seed_for_generation,  # Use config.seed (or params.seed fallback) instead of params.seed directly
-            reference_audio=params.reference_audio,
-            audio_duration=audio_duration,
-            batch_size=config.batch_size if config.batch_size is not None else 1,
-            src_audio=params.src_audio,
-            audio_code_string=audio_code_string_to_use,
-            repainting_start=params.repainting_start,
-            repainting_end=params.repainting_end,
-            instruction=params.instruction,
-            audio_cover_strength=params.audio_cover_strength,
-            task_type=params.task_type,
-            use_adg=params.use_adg,
-            cfg_interval_start=params.cfg_interval_start,
-            cfg_interval_end=params.cfg_interval_end,
-            shift=params.shift,
-            infer_method=params.infer_method,
-            timesteps=params.timesteps,
-            progress=progress,
-        )
+        actual_batch_size = config.batch_size if config.batch_size is not None else 1
 
-        # Check if generation failed
-        if not result.get("success", False):
-            return GenerationResult(
-                audios=[],
-                status_message=result.get("status_message", ""),
-                extra_outputs={},
-                success=False,
-                error=result.get("error"),
+        # Sequential generation: generate one at a time to reduce VRAM usage
+        if config.sequential_generation and actual_batch_size > 1:
+            dit_audios = []
+            dit_extra_outputs = {}
+            status_message = ""
+
+            for seq_idx in range(actual_batch_size):
+                if progress:
+                    progress(0.55 + (seq_idx / actual_batch_size) * 0.25,
+                             desc=f"Generating audio {seq_idx + 1}/{actual_batch_size}...")
+
+                # Get single item from batch inputs
+                seq_seed = [seed_for_generation[seq_idx]] if isinstance(seed_for_generation, list) else seed_for_generation
+                seq_audio_code = None
+                if isinstance(audio_code_string_to_use, list) and seq_idx < len(audio_code_string_to_use):
+                    seq_audio_code = audio_code_string_to_use[seq_idx]
+                elif isinstance(audio_code_string_to_use, str):
+                    seq_audio_code = audio_code_string_to_use
+
+                result = dit_handler.generate_music(
+                    captions=dit_input_caption,
+                    lyrics=dit_input_lyrics,
+                    bpm=bpm,
+                    key_scale=key_scale,
+                    time_signature=time_signature,
+                    vocal_language=dit_input_vocal_language,
+                    inference_steps=params.inference_steps,
+                    guidance_scale=params.guidance_scale,
+                    use_random_seed=False,  # We're passing explicit seed
+                    seed=seq_seed,
+                    reference_audio=params.reference_audio,
+                    audio_duration=audio_duration,
+                    batch_size=1,  # Generate one at a time
+                    src_audio=params.src_audio,
+                    audio_code_string=seq_audio_code,
+                    repainting_start=params.repainting_start,
+                    repainting_end=params.repainting_end,
+                    instruction=params.instruction,
+                    audio_cover_strength=params.audio_cover_strength,
+                    task_type=params.task_type,
+                    use_adg=params.use_adg,
+                    cfg_interval_start=params.cfg_interval_start,
+                    cfg_interval_end=params.cfg_interval_end,
+                    shift=params.shift,
+                    infer_method=params.infer_method,
+                    timesteps=params.timesteps,
+                    progress=None,  # Don't pass progress to avoid conflicts
+                )
+
+                if not result.get("success", False):
+                    return GenerationResult(
+                        audios=[],
+                        status_message=result.get("status_message", f"Failed at item {seq_idx + 1}"),
+                        extra_outputs={},
+                        success=False,
+                        error=result.get("error"),
+                    )
+
+                # Accumulate results
+                dit_audios.extend(result.get("audios", []))
+                if seq_idx == 0:
+                    dit_extra_outputs = result.get("extra_outputs", {})
+                status_message = result.get("status_message", "")
+
+        else:
+            # Standard batch generation
+            result = dit_handler.generate_music(
+                captions=dit_input_caption,
+                lyrics=dit_input_lyrics,
+                bpm=bpm,
+                key_scale=key_scale,
+                time_signature=time_signature,
+                vocal_language=dit_input_vocal_language,
+                inference_steps=params.inference_steps,
+                guidance_scale=params.guidance_scale,
+                use_random_seed=config.use_random_seed,
+                seed=seed_for_generation,  # Use config.seed (or params.seed fallback) instead of params.seed directly
+                reference_audio=params.reference_audio,
+                audio_duration=audio_duration,
+                batch_size=actual_batch_size,
+                src_audio=params.src_audio,
+                audio_code_string=audio_code_string_to_use,
+                repainting_start=params.repainting_start,
+                repainting_end=params.repainting_end,
+                instruction=params.instruction,
+                audio_cover_strength=params.audio_cover_strength,
+                task_type=params.task_type,
+                use_adg=params.use_adg,
+                cfg_interval_start=params.cfg_interval_start,
+                cfg_interval_end=params.cfg_interval_end,
+                shift=params.shift,
+                infer_method=params.infer_method,
+                timesteps=params.timesteps,
+                progress=progress,
             )
 
-        # Extract results from dit_handler.generate_music dict
-        dit_audios = result.get("audios", [])
-        status_message = result.get("status_message", "")
-        dit_extra_outputs = result.get("extra_outputs", {})
+            # Check if generation failed
+            if not result.get("success", False):
+                return GenerationResult(
+                    audios=[],
+                    status_message=result.get("status_message", ""),
+                    extra_outputs={},
+                    success=False,
+                    error=result.get("error"),
+                )
+
+            # Extract results from dit_handler.generate_music dict
+            dit_audios = result.get("audios", [])
+            status_message = result.get("status_message", "")
+            dit_extra_outputs = result.get("extra_outputs", {})
 
         # Use the seed list already prepared above (from config.seed or params.seed fallback)
         # actual_seed_list was computed earlier using dit_handler.prepare_seeds

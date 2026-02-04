@@ -473,7 +473,13 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
                             info=t("generation.batch_size_info") + f" (Max: {max_batch_size})",
                             interactive=not service_mode  # Fixed in service mode
                         )
-        
+                        sequential_generation = gr.Checkbox(
+                            label="Sequential Generation (Queue)",
+                            value=True,  # Default to True for stability
+                            info="Generate one at a time instead of in parallel. Uses less VRAM but takes longer.",
+                            interactive=not service_mode
+                        )
+
         # Advanced Settings
         # Default UI settings use turbo mode (max 20 steps, default 8, show shift with default 3)
         # These will be updated after model initialization based on handler.is_turbo_model()
@@ -781,6 +787,7 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
         "time_signature": time_signature,
         "audio_duration": audio_duration,
         "batch_size_input": batch_size_input,
+        "sequential_generation": sequential_generation,
         "inference_steps": inference_steps,
         "guidance_scale": guidance_scale,
         "seed": seed,
