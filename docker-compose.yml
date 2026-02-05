@@ -31,7 +31,8 @@ x-common-settings: &common-settings
   # Volume mounts
   volumes:
     - acestep-checkpoints:/app/checkpoints    # Model weights
-    - acestep-cache:/app/.cache               # Caches and outputs
+    - acestep-cache:/app/.cache               # Caches (HuggingFace, triton, etc.)
+    - acestep-outputs:/app/outputs            # Generated audio files (persistent)
   # Restart policy
   restart: unless-stopped
   # Common environment variables
@@ -146,9 +147,14 @@ volumes:
   acestep-checkpoints:
     name: acestep-checkpoints
 
-  # Cache storage for triton, huggingface, and generated audio
+  # Cache storage for triton, huggingface, etc.
   acestep-cache:
     name: acestep-cache
+
+  # Generated audio files (organized by date/session)
+  # Mount a host directory for easy access: -v /path/to/outputs:/app/outputs
+  acestep-outputs:
+    name: acestep-outputs
 
 # =============================================================================
 # Networks (optional, for multi-container setups)

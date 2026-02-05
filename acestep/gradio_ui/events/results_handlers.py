@@ -22,6 +22,7 @@ from acestep.gpu_config import (
     get_global_gpu_config,
     check_duration_limit,
     check_batch_size_limit,
+    get_session_output_dir,
 )
 
 
@@ -678,16 +679,20 @@ def generate_with_progress(
     )
     time_module.sleep(0.1)
     
+    # Create a session directory for this generation batch
+    # Uses configurable output directory (set via ACESTEP_OUTPUT_DIR env var)
+    session_output_dir = get_session_output_dir()
+    logger.info(f"Saving generated audio to: {session_output_dir}")
+
     for i in range(8):
         if i < len(audios):
             key = audios[i]["key"]
             audio_tensor = audios[i]["tensor"]
             sample_rate = audios[i]["sample_rate"]
             audio_params = audios[i]["params"]
-            temp_dir = tempfile.mkdtemp(f"acestep_gradio_results/")
-            os.makedirs(temp_dir, exist_ok=True)
-            json_path = os.path.join(temp_dir, f"{key}.json")
-            audio_path = os.path.join(temp_dir, f"{key}.{audio_format}")
+            # Save directly to session output directory (no temp files)
+            json_path = os.path.join(session_output_dir, f"{key}.json")
+            audio_path = os.path.join(session_output_dir, f"{key}.{audio_format}")
             save_audio(audio_data=audio_tensor, output_path=audio_path, sample_rate=sample_rate, format=audio_format, channels_first=True)
             with open(json_path, 'w', encoding='utf-8') as f:
                 json.dump(audio_params, f, indent=2, ensure_ascii=False)

@@ -37,7 +37,7 @@ try:
     from .llm_inference import LLMHandler
     from .dataset_handler import DatasetHandler
     from .gradio_ui import create_gradio_interface
-    from .gpu_config import get_gpu_config, get_gpu_memory_gb, print_gpu_config_info, set_global_gpu_config
+    from .gpu_config import get_gpu_config, get_gpu_memory_gb, print_gpu_config_info, set_global_gpu_config, get_output_dir, print_output_dir_info
 except ImportError:
     # When executed as a script: `python acestep/acestep_v15_pipeline.py`
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -47,7 +47,7 @@ except ImportError:
     from acestep.llm_inference import LLMHandler
     from acestep.dataset_handler import DatasetHandler
     from acestep.gradio_ui import create_gradio_interface
-    from acestep.gpu_config import get_gpu_config, get_gpu_memory_gb, print_gpu_config_info, set_global_gpu_config
+    from acestep.gpu_config import get_gpu_config, get_gpu_memory_gb, print_gpu_config_info, set_global_gpu_config, get_output_dir, print_output_dir_info
 
 
 def create_demo(init_params=None, language='en'):
@@ -149,9 +149,8 @@ def main():
 
     args = parser.parse_args()
 
-    # Enable API requires init_service
+    # Enable API - load config from .env if not specified (but don't force init_service)
     if args.enable_api:
-        args.init_service = True
         # Load config from .env if not specified
         if args.config_path is None:
             args.config_path = os.environ.get("ACESTEP_CONFIG_PATH")
@@ -329,6 +328,10 @@ def main():
 
         print(f"Launching server on {args.server_name}:{args.port}...")
 
+        # Print output directory configuration
+        print_output_dir_info()
+        output_dir = get_output_dir()
+
         # Setup authentication if provided
         auth = None
         if args.auth_username and args.auth_password:
@@ -350,6 +353,7 @@ def main():
                 prevent_thread_lock=True,  # Don't block, so we can add routes
                 inbrowser=False,
                 auth=auth,
+                allowed_paths=[output_dir],  # Allow serving files from output directory
             )
 
             # Now add API routes to Gradio's FastAPI app (app is available after launch)
@@ -376,6 +380,7 @@ def main():
                 prevent_thread_lock=False,
                 inbrowser=False,
                 auth=auth,
+                allowed_paths=[output_dir],  # Allow serving files from output directory
             )
     except Exception as e:
         print(f"Error launching Gradio: {e}", file=sys.stderr)

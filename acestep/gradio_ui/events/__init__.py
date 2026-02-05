@@ -118,6 +118,7 @@ def setup_event_handlers(demo, dit_handler, llm_handler, dataset_handler, datase
             generation_section["compile_model_checkbox"],
             generation_section["quantization_checkbox"],
             generation_section["backend_dropdown"],
+            generation_section["split_gpu_checkbox"],
         ],
         outputs=[
             generation_section["switch_status"],
@@ -140,6 +141,15 @@ def setup_event_handlers(demo, dit_handler, llm_handler, dataset_handler, datase
             generation_section["switch_dit_dropdown"],
             generation_section["switch_lm_dropdown"],
             generation_section["model_status_display"],
+        ]
+    )
+
+    generation_section["unload_all_btn"].click(
+        fn=lambda: gen_h.unload_all_models(dit_handler, llm_handler),
+        outputs=[
+            generation_section["switch_status"],
+            generation_section["model_status_display"],
+            generation_section["generate_btn"],
         ]
     )
 
@@ -567,7 +577,48 @@ def setup_event_handlers(demo, dit_handler, llm_handler, dataset_handler, datase
         )
     
     def generation_wrapper(*args):
-        yield from res_h.generate_with_batch_management(dit_handler, llm_handler, *args)
+        # Auto-load models if not loaded
+        # The last 7 args are model config: dit_dropdown, lm_dropdown, checkpoint, device, flash_attn, backend, split_gpu
+        model_config_args = args[-7:]
+        generation_args = args[:-7]
+
+        dit_dropdown, lm_dropdown, checkpoint, device, flash_attn, backend, split_gpu = model_config_args
+
+        # Check if DiT model needs loading
+        if dit_handler.model is None:
+            gr.Info("🔄 Auto-loading models... Please wait.")
+            # Use switch_models_wrapper to load the selected models
+            status, _, btn_state, *_ = gen_h.switch_models_wrapper(
+                dit_handler, llm_handler,
+                dit_dropdown,
+                lm_dropdown,
+                checkpoint,
+                device,
+                flash_attn,
+                True,  # offload_to_cpu
+                False,  # offload_dit_to_cpu
+                True,  # compile_model
+                True,  # quantization
+                backend,
+                split_gpu,
+            )
+            if dit_handler.model is None:
+                # Model loading failed
+                yield (
+                    (None,) * 8 +  # audio outputs
+                    (None, f"❌ Failed to auto-load models:\n{status}", "Model loading failed", gr.skip()) +
+                    (gr.skip(),) * 8 +  # scores
+                    (gr.skip(),) * 8 +  # codes
+                    (gr.skip(),) * 8 +  # accordions
+                    (gr.skip(),) * 8 +  # lrcs
+                    (gr.skip(), gr.skip()) +  # lm_metadata, is_format_caption
+                    (gr.skip(), gr.skip(), gr.skip(), gr.skip()) +  # batch states
+                    (gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip())  # batch controls
+                )
+                return
+
+        yield from res_h.generate_with_batch_management(dit_handler, llm_handler, *generation_args)
+
     # ========== Generation Handler ==========
     generation_section["generate_btn"].click(
         fn=generation_wrapper,
@@ -623,6 +674,14 @@ def setup_event_handlers(demo, dit_handler, llm_handler, dataset_handler, datase
             results_section["total_batches"],
             results_section["batch_queue"],
             results_section["generation_params_state"],
+            # Model config for auto-loading (last 7 inputs)
+            generation_section["switch_dit_dropdown"],
+            generation_section["switch_lm_dropdown"],
+            generation_section["checkpoint_dropdown"],
+            generation_section["device"],
+            generation_section["use_flash_attention_checkbox"],
+            generation_section["backend_dropdown"],
+            generation_section["split_gpu_checkbox"],
         ],
         outputs=[
             results_section["generated_audio_1"],

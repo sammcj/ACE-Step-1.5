@@ -2,6 +2,7 @@
 Gradio UI Generation Section Module
 Contains generation section component definitions
 """
+import torch
 import gradio as gr
 from acestep.constants import (
     VALID_LANGUAGES,
@@ -274,13 +275,23 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
                     info="0.6B=6-12GB, 1.7B=12-16GB, 4B=16GB+. Will auto-download if needed.",
                 )
 
+            # Multi-GPU options
+            num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+            with gr.Row(visible=num_gpus > 1):
+                split_gpu_checkbox = gr.Checkbox(
+                    label="🔀 Split GPUs (DiT on GPU 0, LM on GPU 1)",
+                    value=num_gpus > 1,  # Default to True when multiple GPUs detected
+                    info=f"Detected {num_gpus} GPUs. Enable to put DiT and LM on separate GPUs for better memory utilization.",
+                )
+
             with gr.Row():
-                switch_models_btn = gr.Button("🔄 Switch Models", variant="primary", size="lg")
-                refresh_models_btn = gr.Button("🔃 Refresh List", variant="secondary", size="sm")
+                switch_models_btn = gr.Button("🔄 Load / Switch Models", variant="primary", size="lg")
+                unload_all_btn = gr.Button("🗑️ Unload All (Free VRAM)", variant="stop", size="lg")
+                refresh_models_btn = gr.Button("🔃 Refresh", variant="secondary", size="sm")
 
             switch_status = gr.Textbox(
-                label="Switch Status",
-                value="",
+                label="Status",
+                value="💡 No models loaded - select models above and click 'Load / Switch Models' to start, or just click Generate to auto-load.",
                 interactive=False,
                 lines=2,
             )
@@ -444,16 +455,16 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
                             )
                     
                     # Simple/Custom Mode Toggle
-                    # In service mode: only Custom mode, hide the toggle
+                    # Default to Custom mode - Simple is for users who need help with lyrics/style
                     with gr.Row(visible=not service_mode):
                         generation_mode = gr.Radio(
                             choices=[
-                                (t("generation.mode_simple"), "simple"),
-                                (t("generation.mode_custom"), "custom"),
+                                ("✨ Simple (AI helps write lyrics & style)", "simple"),
+                                ("🎛️ Custom (full control)", "custom"),
                             ],
-                            value="custom" if service_mode else "simple",
-                            label=t("generation.mode_label"),
-                            info=t("generation.mode_info"),
+                            value="custom",
+                            label="Generation Mode",
+                            info="Simple: AI generates lyrics & style from a brief description. Custom: You provide the full details.",
                         )
                     
                     # Simple Mode Components - hidden in service mode
@@ -871,6 +882,8 @@ def create_generation_section(dit_handler, llm_handler, init_params=None, langua
         "switch_dit_dropdown": switch_dit_dropdown,
         "switch_lm_dropdown": switch_lm_dropdown,
         "switch_models_btn": switch_models_btn,
+        "unload_all_btn": unload_all_btn,
+        "split_gpu_checkbox": split_gpu_checkbox,
         "refresh_models_btn": refresh_models_btn,
         "switch_status": switch_status,
         "task_type": task_type,

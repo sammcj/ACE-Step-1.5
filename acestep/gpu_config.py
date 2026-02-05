@@ -19,6 +19,10 @@ from loguru import logger
 # Environment variable for debugging/testing different GPU memory configurations
 DEBUG_MAX_CUDA_VRAM_ENV = "MAX_CUDA_VRAM"
 
+# Environment variable for configuring output directory for generated audio
+# Default: ./outputs (or /app/outputs in Docker)
+OUTPUT_DIR_ENV = "ACESTEP_OUTPUT_DIR"
+
 
 @dataclass
 class GPUConfig:
@@ -392,3 +396,98 @@ def set_global_gpu_config(config: GPUConfig):
     """Set the global GPU configuration."""
     global _global_gpu_config
     _global_gpu_config = config
+
+
+# ============== Output Directory Configuration ==============
+
+def get_output_dir() -> str:
+    """
+    Get the configured output directory for generated audio files.
+
+    Configuration:
+        Set environment variable ACESTEP_OUTPUT_DIR to customize the output location.
+        Example: ACESTEP_OUTPUT_DIR=/data/acestep/outputs
+
+        This directory can be mounted as a Docker volume for persistence.
+
+    Returns:
+        Path to output directory (creates it if it doesn't exist)
+    """
+    # Check for environment variable override
+    output_dir = os.environ.get(OUTPUT_DIR_ENV)
+
+    if output_dir:
+        output_dir = os.path.abspath(output_dir)
+    else:
+        # Default: ./outputs relative to working directory
+        # In Docker, this would typically be /app/outputs
+        if os.path.exists("/app"):
+            output_dir = "/app/outputs"
+        else:
+            output_dir = os.path.join(os.getcwd(), "outputs")
+
+    # Ensure the directory exists
+    os.makedirs(output_dir, exist_ok=True)
+
+    return output_dir
+
+
+def get_dated_output_dir() -> str:
+    """
+    Get a dated subdirectory within the output directory for organizing generated files.
+
+    Creates structure like: outputs/2024-01-15/
+
+    Returns:
+        Path to dated output directory
+    """
+    from datetime import datetime
+
+    base_dir = get_output_dir()
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    dated_dir = os.path.join(base_dir, date_str)
+
+    os.makedirs(dated_dir, exist_ok=True)
+
+    return dated_dir
+
+
+def get_session_output_dir(session_id: Optional[str] = None) -> str:
+    """
+    Get a session-specific directory within the dated output directory.
+
+    Creates structure like: outputs/2024-01-15/session_abc123/
+
+    Args:
+        session_id: Optional session identifier. If None, generates a timestamp-based ID.
+
+    Returns:
+        Path to session output directory
+    """
+    from datetime import datetime
+    import uuid
+
+    dated_dir = get_dated_output_dir()
+
+    if session_id is None:
+        # Generate a session ID based on time and random component
+        timestamp = datetime.now().strftime("%H%M%S")
+        short_uuid = str(uuid.uuid4())[:8]
+        session_id = f"session_{timestamp}_{short_uuid}"
+
+    session_dir = os.path.join(dated_dir, session_id)
+    os.makedirs(session_dir, exist_ok=True)
+
+    return session_dir
+
+
+def print_output_dir_info():
+    """Print output directory configuration information."""
+    output_dir = get_output_dir()
+    env_value = os.environ.get(OUTPUT_DIR_ENV)
+
+    if env_value:
+        logger.info(f"Output Directory: {output_dir} (configured via {OUTPUT_DIR_ENV})")
+    else:
+        logger.info(f"Output Directory: {output_dir} (default)")
+    logger.info(f"  - Tip: Set {OUTPUT_DIR_ENV} to customize, or mount as Docker volume for persistence")

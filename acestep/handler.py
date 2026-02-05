@@ -225,36 +225,125 @@ class AceStepHandler:
             logger.exception("Failed to unload LoRA")
             return f"❌ Failed to unload LoRA: {str(e)}"
 
-    def unload_model(self) -> str:
+    def unload_model(self, unload_all: bool = False) -> str:
         """Unload the current DiT model to free GPU memory.
+
+        Args:
+            unload_all: If True, also unload VAE and text encoder to free all VRAM
 
         Returns:
             Status message
         """
-        if self.model is None:
+        if self.model is None and not unload_all:
             return "⚠️ No model loaded."
+
+        unloaded_components = []
 
         try:
             # Unload LoRA first if loaded
             if self.lora_loaded:
                 self.unload_lora()
+                unloaded_components.append("LoRA")
 
-            # Delete model and clear references
-            del self.model
-            self.model = None
+            # Delete main model and clear references
+            if self.model is not None:
+                # Move to CPU first to help release GPU memory
+                try:
+                    self.model.to("cpu")
+                except Exception:
+                    pass
+                del self.model
+                self.model = None
+                unloaded_components.append("DiT")
+                logger.info("DiT model unloaded")
+
             self._base_decoder = None
             self.current_config_path = None
+            self.config = None
 
-            # Clear CUDA cache
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
+            # Unload VAE and text encoder if requested (full VRAM cleanup)
+            if unload_all:
+                if self.vae is not None:
+                    try:
+                        self.vae.to("cpu")
+                    except Exception:
+                        pass
+                    del self.vae
+                    self.vae = None
+                    unloaded_components.append("VAE")
+                    logger.info("VAE unloaded")
 
+                if self.text_encoder is not None:
+                    try:
+                        self.text_encoder.to("cpu")
+                    except Exception:
+                        pass
+                    del self.text_encoder
+                    self.text_encoder = None
+                    unloaded_components.append("TextEncoder")
+                    logger.info("Text encoder unloaded")
+
+                if self.text_tokenizer is not None:
+                    del self.text_tokenizer
+                    self.text_tokenizer = None
+
+                if self.silence_latent is not None:
+                    del self.silence_latent
+                    self.silence_latent = None
+
+                # Also clear the reward model if loaded
+                if self.reward_model is not None:
+                    try:
+                        self.reward_model.to("cpu")
+                    except Exception:
+                        pass
+                    del self.reward_model
+                    self.reward_model = None
+                    unloaded_components.append("RewardModel")
+                    logger.info("Reward model unloaded")
+
+            # Aggressive CUDA memory cleanup
             import gc
             gc.collect()
 
-            logger.info("DiT model unloaded successfully")
-            return "✅ DiT model unloaded"
+            if torch.cuda.is_available():
+                # First pass
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+
+                # Force garbage collection again
+                gc.collect()
+
+                # Second pass
+                torch.cuda.empty_cache()
+
+                # Reset memory stats
+                try:
+                    torch.cuda.reset_peak_memory_stats()
+                    torch.cuda.reset_accumulated_memory_stats()
+                except Exception:
+                    pass
+
+                # Try IPC collect for shared memory
+                try:
+                    torch.cuda.ipc_collect()
+                except Exception:
+                    pass
+
+                # Clear torch.compile caches
+                try:
+                    import torch._dynamo
+                    torch._dynamo.reset()
+                except Exception:
+                    pass
+
+            components_str = ", ".join(unloaded_components) if unloaded_components else "None"
+            if unload_all:
+                logger.info(f"All models unloaded successfully: {components_str}")
+                return f"✅ All models unloaded ({components_str})"
+            else:
+                logger.info(f"DiT model unloaded successfully: {components_str}")
+                return f"✅ DiT model unloaded ({components_str})"
 
         except Exception as e:
             logger.exception("Failed to unload model")
@@ -381,19 +470,23 @@ class AceStepHandler:
                 if hasattr(torch, 'xpu') and torch.xpu.is_available():
                     device = "xpu"
                 elif torch.cuda.is_available():
-                    device = "cuda"
+                    device = "cuda:0"  # Default to first GPU
                 elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
                     device = "mps"
                 else:
                     device = "cpu"
+            elif device == "cuda":
+                # Convert generic "cuda" to "cuda:0" for explicit device placement
+                device = "cuda:0"
 
             status_msg = ""
-            
+
             self.device = device
             self.offload_to_cpu = offload_to_cpu
             self.offload_dit_to_cpu = offload_dit_to_cpu
             # Set dtype based on device: bfloat16 for cuda, float32 for cpu
-            self.dtype = torch.bfloat16 if device in ["cuda","xpu"] else torch.float32
+            is_cuda = device.startswith("cuda") or device == "xpu"
+            self.dtype = torch.bfloat16 if is_cuda else torch.float32
 
             # Multi-GPU support: detect available GPUs and use device_map="auto" if enabled
             self.multi_gpu = False

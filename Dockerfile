@@ -99,6 +99,7 @@ RUN mkdir -p /app/checkpoints /app/.cache/acestep/tmp /app/.cache/acestep/api_au
     /app/.cache/huggingface/hub /app/.cache/huggingface/modules \
     /app/.cache/modelscope \
     /app/.uv-cache \
+    /app/outputs \
     && chown -R acestep:acestep /app
 
 # =============================================================================
@@ -122,6 +123,9 @@ ENV ACESTEP_LM_BACKEND=vllm
 # API server configuration
 ENV ACESTEP_API_HOST=0.0.0.0
 ENV ACESTEP_API_PORT=8001
+
+# Output directory for generated audio (mount as volume for persistence)
+ENV ACESTEP_OUTPUT_DIR=/app/outputs
 
 # Gradio configuration
 ENV GRADIO_SERVER_NAME=0.0.0.0
@@ -153,7 +157,10 @@ ENV UV_CACHE_DIR=/app/.uv-cache
 EXPOSE 7860 8001
 
 # Define volumes for persistent data
-VOLUME ["/app/checkpoints", "/app/.cache"]
+# - /app/checkpoints: Model checkpoints
+# - /app/.cache: HuggingFace cache, triton cache, etc.
+# - /app/outputs: Generated audio files (organized by date/session)
+VOLUME ["/app/checkpoints", "/app/.cache", "/app/outputs"]
 
 # =============================================================================
 # Startup

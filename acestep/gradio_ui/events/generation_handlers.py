@@ -8,6 +8,7 @@ import random
 import glob
 import gradio as gr
 from typing import Optional, List, Tuple
+from loguru import logger
 from acestep.constants import (
     TASK_TYPES_TURBO,
     TASK_TYPES_BASE,
@@ -1039,6 +1040,7 @@ def switch_models_wrapper(
     compile_model: bool,
     quantization: bool,
     backend: str,
+    split_gpu: bool = False,
 ):
     """
     Switch to different DiT and/or LM models.
@@ -1056,6 +1058,7 @@ def switch_models_wrapper(
         compile_model: Whether to compile the model
         quantization: Whether to use quantization
         backend: LM backend to use
+        split_gpu: Whether to split DiT and LM across GPUs (DiT on GPU 0, LM on GPU 1)
 
     Returns:
         Tuple of (status_message, model_status_display, generate_btn_state, model_type_settings...)
@@ -1063,6 +1066,17 @@ def switch_models_wrapper(
     import torch
 
     status_messages = []
+
+    # Determine device assignments for split GPU mode
+    num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    if split_gpu and num_gpus > 1:
+        dit_device = "cuda:0"
+        lm_device = "cuda:1"
+        status_messages.append(f"🔀 Split GPU mode: DiT→GPU 0, LM→GPU 1")
+    else:
+        # Both on same device
+        dit_device = device_value if device_value != "auto" else ("cuda:0" if torch.cuda.is_available() else "cpu")
+        lm_device = dit_device
 
     # Get current models
     current_dit = dit_handler.get_current_model_name() if hasattr(dit_handler, 'get_current_model_name') else None
@@ -1105,7 +1119,7 @@ def switch_models_wrapper(
     if dit_changed:
         quant_value = "int8_weight_only" if quantization else None
         dit_status, dit_success = dit_handler.initialize_service(
-            checkpoint_dropdown_value, new_dit_model, device_value,
+            checkpoint_dropdown_value, new_dit_model, dit_device,
             use_flash_attention=use_flash_attention, compile_model=compile_model,
             offload_to_cpu=offload_to_cpu, offload_dit_to_cpu=offload_dit_to_cpu,
             quantization=quant_value
@@ -1127,7 +1141,7 @@ def switch_models_wrapper(
             checkpoint_dir=checkpoint_dir,
             lm_model_path=new_lm_model,
             backend=backend,
-            device=device_value,
+            device=lm_device,
             offload_to_cpu=offload_to_cpu,
             dtype=dit_handler.dtype if dit_handler.dtype else None
         )
@@ -1183,5 +1197,123 @@ def refresh_model_lists(dit_handler, llm_handler):
         gr.update(choices=all_dit_choices, value=current_dit if current_dit in all_dit_choices else None),
         gr.update(choices=all_lm_choices, value=current_lm if current_lm in all_lm_choices else "None (DiT only)"),
         f"DiT: {current_dit}\nLM: {current_lm}",
+    )
+
+
+def unload_all_models(dit_handler, llm_handler):
+    """
+    Unload all models to free VRAM completely.
+    This includes DiT, VAE, text encoder, and LM.
+
+    Returns:
+        Tuple of (status_message, model_status_display, generate_btn_state)
+    """
+    import torch
+    import gc
+
+    status_messages = []
+
+    # Record initial VRAM usage
+    initial_used = 0
+    if torch.cuda.is_available():
+        try:
+            free, total = torch.cuda.mem_get_info()
+            initial_used = (total - free) / (1024**3)
+        except Exception:
+            pass
+
+    # Unload LM first (if loaded) - LM often uses more VRAM
+    if llm_handler.llm_initialized:
+        lm_msg = llm_handler.unload()
+        status_messages.append(f"LM: {lm_msg}")
+    else:
+        status_messages.append("LM: Not loaded")
+
+    # Intermediate cleanup after LM unload
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+
+    # Unload ALL DiT components (model, VAE, text encoder)
+    has_any = (dit_handler.model is not None or
+               dit_handler.vae is not None or
+               dit_handler.text_encoder is not None)
+    if has_any:
+        dit_msg = dit_handler.unload_model(unload_all=True)  # Unload everything
+        status_messages.append(f"DiT: {dit_msg}")
+    else:
+        status_messages.append("DiT: Not loaded")
+
+    # Extra aggressive memory cleanup - multiple passes
+    for _ in range(3):
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+
+    if torch.cuda.is_available():
+        # Reset memory stats
+        try:
+            torch.cuda.reset_peak_memory_stats()
+            torch.cuda.reset_accumulated_memory_stats()
+        except Exception:
+            pass
+
+        # Try IPC collect for any shared memory
+        try:
+            torch.cuda.ipc_collect()
+        except Exception:
+            pass
+
+        # Clear torch.compile caches (dynamo, inductor)
+        try:
+            import torch._dynamo
+            torch._dynamo.reset()
+            logger.info("torch.dynamo cache reset")
+        except Exception:
+            pass
+
+        try:
+            import torch._inductor
+            if hasattr(torch._inductor, 'cudagraph_trees'):
+                torch._inductor.cudagraph_trees.reset()
+                logger.info("torch.inductor cudagraph cache reset")
+        except Exception:
+            pass
+
+        # Clear any functools lru_cache that might hold tensors
+        try:
+            import functools
+            # This is a bit aggressive but helps clear any cached computations
+            gc.collect()
+        except Exception:
+            pass
+
+        # Final cleanup pass
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+
+        # Report freed memory
+        try:
+            free_mem, total_mem = torch.cuda.mem_get_info()
+            free_gb = free_mem / (1024**3)
+            total_gb = total_mem / (1024**3)
+            used_gb = total_gb - free_gb
+            freed_gb = initial_used - used_gb
+
+            status_messages.append(f"💾 VRAM: {free_gb:.1f}GB free / {total_gb:.1f}GB total")
+            if freed_gb > 0.1:
+                status_messages.append(f"📉 Freed: {freed_gb:.1f}GB")
+            if used_gb > 1.0:
+                status_messages.append(f"⚠️ {used_gb:.1f}GB still in use (CUDA overhead/cache)")
+        except Exception:
+            pass
+
+    return (
+        "\n".join(status_messages),
+        "DiT: None\nLM: None\nVAE: None\nText Encoder: None",
+        gr.update(interactive=False),  # Disable generate button until models are loaded
     )
 

@@ -87,6 +87,34 @@ class LLMHandler:
             return "⚠️ No LM model loaded."
 
         try:
+            backend_was = self.llm_backend
+
+            # For vLLM/nano-vllm, we need special cleanup
+            if self.llm_backend == "vllm" and self.llm is not None:
+                try:
+                    # Try to access and clear the KV cache directly
+                    if hasattr(self.llm, 'model_runner'):
+                        runner = self.llm.model_runner
+                        if hasattr(runner, 'kv_cache') and runner.kv_cache is not None:
+                            del runner.kv_cache
+                            runner.kv_cache = None
+                            logger.info("nano-vllm KV cache cleared")
+                        # Also clear module caches
+                        if hasattr(runner, 'model'):
+                            for name, module in runner.model.named_modules():
+                                if hasattr(module, 'k_cache'):
+                                    module.k_cache = torch.tensor([])
+                                if hasattr(module, 'v_cache'):
+                                    module.v_cache = torch.tensor([])
+
+                    # Try to shutdown vLLM engine properly
+                    if hasattr(self.llm, 'shutdown'):
+                        self.llm.shutdown()
+                    elif hasattr(self.llm, '__del__'):
+                        self.llm.__del__()
+                except Exception as e:
+                    logger.debug(f"vLLM shutdown: {e}")
+
             # Delete model and tokenizer
             if self.llm is not None:
                 del self.llm
@@ -100,16 +128,59 @@ class LLMHandler:
                 del self._hf_model_for_scoring
                 self._hf_model_for_scoring = None
 
+            # Clear constrained processor state
+            if self.constrained_processor is not None:
+                self.constrained_processor = None
+
             self.llm_initialized = False
+            self.llm_backend = None
             self.current_lm_model_path = None
 
-            # Clear CUDA cache
+            # Destroy distributed process group if it exists (required for vLLM re-initialization)
+            try:
+                import torch.distributed as dist
+                if dist.is_initialized():
+                    dist.destroy_process_group()
+                    logger.info("Distributed process group destroyed")
+            except Exception as e:
+                logger.debug(f"Could not destroy process group (may not exist): {e}")
+
+            # Aggressive CUDA memory cleanup
+            import gc
+            gc.collect()
+
             if torch.cuda.is_available():
+                # First pass
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
 
-            import gc
-            gc.collect()
+                # Force garbage collection
+                gc.collect()
+
+                # Second pass
+                torch.cuda.empty_cache()
+
+                # Reset peak memory stats
+                try:
+                    torch.cuda.reset_peak_memory_stats()
+                    torch.cuda.reset_accumulated_memory_stats()
+                except Exception:
+                    pass
+
+                # For vLLM, try to reset CUDA context more aggressively
+                if backend_was == "vllm":
+                    try:
+                        # This can help release vLLM's memory allocations
+                        torch.cuda.ipc_collect()
+                    except Exception:
+                        pass
+
+                # Clear torch.compile caches
+                try:
+                    import torch._dynamo
+                    torch._dynamo.reset()
+                except Exception:
+                    pass
 
             logger.info("LM model unloaded successfully")
             return "✅ LM model unloaded"
@@ -384,13 +455,17 @@ class LLMHandler:
         """
         try:
             if device == "auto":
-                device = "cuda" if torch.cuda.is_available() else "cpu"
+                device = "cuda:0" if torch.cuda.is_available() else "cpu"
+            elif device == "cuda":
+                # Convert generic "cuda" to "cuda:0" for explicit device placement
+                device = "cuda:0"
 
             self.device = device
             self.offload_to_cpu = offload_to_cpu
             # Set dtype based on device: bfloat16 for cuda, float32 for cpu
+            is_cuda = device.startswith("cuda") or device == "xpu"
             if dtype is None:
-                self.dtype = torch.bfloat16 if device in ["cuda", "xpu"] else torch.float32
+                self.dtype = torch.bfloat16 if is_cuda else torch.float32
             else:
                 self.dtype = dtype
 
@@ -479,9 +554,22 @@ class LLMHandler:
             return "❌ nano-vllm is not installed. Please install it using 'cd acestep/third_parts/nano-vllm && pip install ."
         
         try:
+            # Extract GPU index from device string (e.g., "cuda:1" -> 1)
+            gpu_index = 0
+            if self.device.startswith("cuda:"):
+                try:
+                    gpu_index = int(self.device.split(":")[1])
+                except (IndexError, ValueError):
+                    gpu_index = 0
+
+            # Set the CUDA device for vLLM to use
+            if gpu_index > 0 and torch.cuda.device_count() > gpu_index:
+                torch.cuda.set_device(gpu_index)
+                logger.info(f"[_initialize_5hz_lm_vllm] Set CUDA device to GPU {gpu_index}")
+
             current_device = torch.cuda.current_device()
             device_name = torch.cuda.get_device_name(current_device)
-            
+
             torch.cuda.empty_cache()
             
             # Use adaptive GPU memory utilization based on model size
