@@ -471,20 +471,14 @@ def init_service_wrapper(dit_handler, llm_handler, checkpoint, config_path, devi
         init_llm = False  # Force disable LM on tiers that can't support it
         logger.warning(f"⚠️ LM initialization disabled: GPU tier {gpu_config.tier} ({gpu_config.gpu_memory_gb:.1f}GB) does not support LM")
     
-    # Validate LM model against tier's available models (size-based matching)
+    # Warn (but respect) if the selected LM model exceeds the tier's recommendation
     if init_llm and lm_model_path and gpu_config.available_lm_models:
         if not is_lm_model_size_allowed(lm_model_path, gpu_config.available_lm_models):
-            # The selected model's size class is not supported by this tier.
-            # Find a disk model that matches the recommended size.
-            all_disk_models = llm_handler.get_available_5hz_lm_models() if llm_handler else []
-            fallback = find_best_lm_model_on_disk(gpu_config.recommended_lm_model, all_disk_models)
-            if fallback:
-                old_model = lm_model_path
-                lm_model_path = fallback
-                logger.warning(f"⚠️ LM model {old_model} size not supported for tier {gpu_config.tier}, falling back to {lm_model_path}")
-            else:
-                init_llm = False
-                logger.warning(f"⚠️ No compatible LM model found on disk for tier {gpu_config.tier}, disabling LM")
+            logger.warning(
+                f"⚠️ LM model {lm_model_path} is not in the recommended list for tier {gpu_config.tier} "
+                f"(recommended: {gpu_config.available_lm_models}). Proceeding with user selection — "
+                f"this may cause high VRAM usage or OOM."
+            )
     
     # Validate backend against tier restriction
     if init_llm and gpu_config.lm_backend_restriction == "pt_mlx_only" and backend == "vllm":
@@ -600,17 +594,12 @@ def on_tier_change(selected_tier, llm_handler=None):
     if recommended_backend not in available_backends:
         recommended_backend = available_backends[0]
     
-    # LM model choices — filter disk models by tier
-    tier_lm_models = new_config.available_lm_models
+    # LM model choices — show all disk models (no filtering by tier);
+    # tier only influences the default/recommended selection.
     all_disk_models = llm_handler.get_available_5hz_lm_models() if llm_handler else []
-    if tier_lm_models:
-        filtered = [m for m in all_disk_models if is_lm_model_size_allowed(m, tier_lm_models)]
-        available_lm_models = filtered if filtered else all_disk_models
-    else:
-        available_lm_models = all_disk_models
     
     recommended_lm = new_config.recommended_lm_model
-    default_lm_model = find_best_lm_model_on_disk(recommended_lm, available_lm_models)
+    default_lm_model = find_best_lm_model_on_disk(recommended_lm, all_disk_models)
     
     # Duration and batch limits (use without-LM limits as safe default; init will refine)
     max_duration = new_config.max_duration_without_lm
@@ -637,7 +626,7 @@ def on_tier_change(selected_tier, llm_handler=None):
         # backend_dropdown
         gr.update(choices=available_backends, value=recommended_backend),
         # lm_model_path
-        gr.update(choices=available_lm_models, value=default_lm_model,
+        gr.update(choices=all_disk_models, value=default_lm_model,
                   info=t("service.lm_model_path_info") + (f" (Recommended: {recommended_lm})" if recommended_lm else " (LM not available for this GPU tier)")),
         # init_llm_checkbox
         gr.update(value=new_config.init_lm_default),

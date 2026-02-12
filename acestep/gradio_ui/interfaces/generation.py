@@ -18,7 +18,7 @@ from acestep.constants import (
 )
 from acestep.gradio_ui.i18n import t
 from acestep.gradio_ui.events.generation_handlers import get_ui_control_config
-from acestep.gpu_config import get_global_gpu_config, GPUConfig, is_lm_model_size_allowed, find_best_lm_model_on_disk, get_gpu_device_name, GPU_TIER_LABELS, GPU_TIER_CHOICES
+from acestep.gpu_config import get_global_gpu_config, GPUConfig, find_best_lm_model_on_disk, get_gpu_device_name, GPU_TIER_LABELS, GPU_TIER_CHOICES
 
 
 def _compute_init_defaults(dit_handler, llm_handler, init_params, language):
@@ -168,17 +168,13 @@ def _create_service_config_content(dit_handler, llm_handler, defaults, init_para
         # LM model and backend
         with gr.Row():
             all_lm_models = llm_handler.get_available_5hz_lm_models()
-            tier_lm_models = gpu_config.available_lm_models
-            if tier_lm_models:
-                filtered_lm_models = [m for m in all_lm_models if is_lm_model_size_allowed(m, tier_lm_models)]
-                available_lm_models = filtered_lm_models if filtered_lm_models else all_lm_models
-            else:
-                available_lm_models = all_lm_models
-            default_lm_model = find_best_lm_model_on_disk(recommended_lm, available_lm_models)
+            # Show all available LM models (no filtering by tier);
+            # tier only influences the default/recommended selection.
+            default_lm_model = find_best_lm_model_on_disk(recommended_lm, all_lm_models)
             lm_model_path_value = init_params.get('lm_model_path', default_lm_model) if service_pre_initialized else default_lm_model
             lm_model_path = gr.Dropdown(
                 label=t("service.lm_model_path_label"),
-                choices=available_lm_models,
+                choices=all_lm_models,
                 value=lm_model_path_value,
                 info=t("service.lm_model_path_info") + (f" (Recommended: {recommended_lm})" if recommended_lm else " (LM not available for this GPU tier)"),
             )
