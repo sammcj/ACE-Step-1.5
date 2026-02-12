@@ -22,7 +22,7 @@ class _Host(InitServiceMixin):
 class InitServiceMixinTests(unittest.TestCase):
     def test_device_type_normalizes_device(self):
         host = _Host(project_root="K:/fake_root", device="cuda:0")
-        self.assertEqual(host._device_type(), "cuda:0")
+        self.assertEqual(host._device_type(), "cuda")
 
     def test_is_on_target_device_handles_device_alias(self):
         host = _Host(project_root="K:/fake_root", device="cpu")

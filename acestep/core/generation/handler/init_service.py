@@ -12,7 +12,9 @@ from loguru import logger
 class InitServiceMixin:
     def _device_type(self) -> str:
         """Normalize the host device value to a backend type string."""
-        return self.device if isinstance(self.device, str) else self.device.type
+        if isinstance(self.device, str):
+            return self.device.split(":", 1)[0]
+        return self.device.type
 
     def get_available_checkpoints(self) -> List[str]:
         """Return available checkpoint directory paths under the project root.
@@ -374,7 +376,7 @@ class InitServiceMixin:
             self._recursive_to_device(model, self.device, self.dtype)
 
         if model_name == "model" and hasattr(self, "silence_latent"):
-             self.silence_latent = self.silence_latent.to(self.device).to(self.dtype)
+            self.silence_latent = self.silence_latent.to(self.device).to(self.dtype)
 
         load_time = time.time() - start_time
         self.current_offload_cost += load_time
