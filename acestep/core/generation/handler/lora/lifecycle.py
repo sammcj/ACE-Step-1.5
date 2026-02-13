@@ -45,7 +45,14 @@ def load_lora(self, lora_path: str) -> str:
                 logger.info(f"VRAM before LoRA load: {mem_before:.2f}GB")
             
             # Save only the base model weights as state_dict (CPU to save VRAM)
-            self._base_decoder = {k: v.detach().cpu().clone() for k, v in self.model.decoder.state_dict().items()}
+            try:
+                state_dict = self.model.decoder.state_dict()
+                if not state_dict:
+                    raise ValueError("state_dict is empty - cannot backup decoder")
+                self._base_decoder = {k: v.detach().cpu().clone() for k, v in state_dict.items()}
+            except Exception as e:
+                logger.error(f"Failed to create state_dict backup: {e}")
+                raise
             
             # Calculate backup size in MB
             backup_size_mb = sum(v.numel() * v.element_size() for v in self._base_decoder.values()) / (1024**2)
@@ -53,7 +60,11 @@ def load_lora(self, lora_path: str) -> str:
         else:
             # Restore base decoder from state_dict backup
             logger.info("Restoring base decoder from state_dict backup")
-            self.model.decoder.load_state_dict(self._base_decoder, strict=False)
+            load_result = self.model.decoder.load_state_dict(self._base_decoder, strict=False)
+            if load_result.missing_keys:
+                logger.warning(f"Missing keys when restoring decoder: {load_result.missing_keys[:5]}")
+            if load_result.unexpected_keys:
+                logger.warning(f"Unexpected keys when restoring decoder: {load_result.unexpected_keys[:5]}")
             self.model.decoder = self.model.decoder.to(self.device).to(self.dtype)
 
         logger.info(f"Loading LoRA adapter from {lora_path}")
@@ -96,7 +107,8 @@ def unload_lora(self) -> str:
         return "❌ Base decoder backup not found. Cannot restore."
 
     try:
-        # Log memory before unload
+        # Log memory before unload (track before any operations)
+        mem_before = None
         if hasattr(self, '_memory_allocated'):
             mem_before = self._memory_allocated() / (1024**3)
             logger.info(f"VRAM before LoRA unload: {mem_before:.2f}GB")
@@ -110,11 +122,19 @@ def unload_lora(self) -> str:
             # PEFT's get_base_model() returns the underlying base model without copying
             self.model.decoder = self.model.decoder.get_base_model()
             # Restore state_dict from backup to ensure clean state
-            self.model.decoder.load_state_dict(self._base_decoder, strict=False)
+            load_result = self.model.decoder.load_state_dict(self._base_decoder, strict=False)
+            if load_result.missing_keys:
+                logger.warning(f"Missing keys when restoring decoder: {load_result.missing_keys[:5]}")
+            if load_result.unexpected_keys:
+                logger.warning(f"Unexpected keys when restoring decoder: {load_result.unexpected_keys[:5]}")
         else:
             # Fallback: restore from state_dict backup
             logger.info("Restoring base decoder from state_dict backup")
-            self.model.decoder.load_state_dict(self._base_decoder, strict=False)
+            load_result = self.model.decoder.load_state_dict(self._base_decoder, strict=False)
+            if load_result.missing_keys:
+                logger.warning(f"Missing keys when restoring decoder: {load_result.missing_keys[:5]}")
+            if load_result.unexpected_keys:
+                logger.warning(f"Unexpected keys when restoring decoder: {load_result.unexpected_keys[:5]}")
         
         self.model.decoder = self.model.decoder.to(self.device).to(self.dtype)
         self.model.decoder.eval()
@@ -132,7 +152,7 @@ def unload_lora(self) -> str:
         self._lora_scale_state = {}
 
         # Log memory after unload
-        if hasattr(self, '_memory_allocated'):
+        if mem_before is not None and hasattr(self, '_memory_allocated'):
             mem_after = self._memory_allocated() / (1024**3)
             freed = mem_before - mem_after
             logger.info(f"VRAM after LoRA unload: {mem_after:.2f}GB (freed: {freed:.2f}GB)")

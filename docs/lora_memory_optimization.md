@@ -108,9 +108,9 @@ To validate the memory optimization:
 
 2. Check logs for memory diagnostics:
    ```
-   VRAM before LoRA load: X.XXgb
+   VRAM before LoRA load: X.XXGB
    Base decoder state_dict backed up to CPU (X.XMB)
-   VRAM after LoRA load: Y.YYgb
+   VRAM after LoRA load: Y.YYGB
    ```
 
 3. Expected behavior:
