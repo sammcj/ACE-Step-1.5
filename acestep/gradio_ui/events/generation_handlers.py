@@ -7,6 +7,7 @@ import sys
 import json
 import random
 import glob
+import re
 import gradio as gr
 from typing import Optional, List, Tuple
 from loguru import logger
@@ -497,8 +498,13 @@ def init_service_wrapper(dit_handler, llm_handler, checkpoint, config_path, devi
     
     # Validate LM request against GPU tier
     if init_llm and not gpu_config.available_lm_models:
-        init_llm = False  # Force disable LM on tiers that can't support it
-        logger.warning(f"⚠️ LM initialization disabled: GPU tier {gpu_config.tier} ({gpu_config.gpu_memory_gb:.1f}GB) does not support LM")
+        logger.warning(
+            f"⚠️ GPU tier {gpu_config.tier} ({gpu_config.gpu_memory_gb:.1f}GB) does not support LM on GPU. "
+            "Falling back to CPU for LM initialization."
+        )
+        llm_handler.device = "cpu"
+    else:
+        llm_handler.device = device
     
     # Warn (but respect) if the selected LM model exceeds the tier's recommendation
     if init_llm and lm_model_path and gpu_config.available_lm_models:
@@ -534,7 +540,7 @@ def init_service_wrapper(dit_handler, llm_handler, checkpoint, config_path, devi
             checkpoint_dir=checkpoint_dir,
             lm_model_path=lm_model_path,
             backend=backend,
-            device=device,
+            device=llm_handler.device,
             offload_to_cpu=offload_to_cpu,
             dtype=None,
         )
@@ -807,6 +813,13 @@ def convert_src_audio_to_codes_wrapper(dit_handler, src_audio):
     return codes_string
 
 
+def _contains_audio_code_tokens(codes_string: str) -> bool:
+    """Return True when a string contains at least one serialized audio-code token."""
+    if not isinstance(codes_string, str):
+        return False
+    return bool(re.search(r"<\|audio_code_\d+\|>", codes_string))
+
+
 def analyze_src_audio(dit_handler, llm_handler, src_audio, constrained_decoding_debug=False):
     """Analyze source audio: convert to codes, then transcribe to caption/lyrics/metas.
 
@@ -837,6 +850,10 @@ def analyze_src_audio(dit_handler, llm_handler, src_audio, constrained_decoding_
 
     if not codes_string or not codes_string.strip():
         gr.Warning("Audio conversion produced empty codes.")
+        return _err
+
+    if not _contains_audio_code_tokens(codes_string):
+        gr.Warning("Source file is not valid audio or conversion failed (no audio codes detected).")
         return _err
 
     # Step 2: Transcribe codes to caption/lyrics/metas via LLM

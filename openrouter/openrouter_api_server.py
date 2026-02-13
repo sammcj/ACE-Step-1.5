@@ -3,7 +3,7 @@
 Provides OpenAI Chat Completions API format for text-to-music generation.
 
 Endpoints:
-- GET  /api/v1/models       List available models with pricing
+- GET  /v1/models       List available models with pricing
 - POST /v1/chat/completions Generate music from text prompt
 - GET  /health              Health check
 
@@ -52,7 +52,7 @@ from acestep.inference import (
 # Constants
 # =============================================================================
 
-MODEL_ID = "acemusic/acestep-v1.5-turbo"
+MODEL_ID = "acemusic/acestep-v15-turbo"
 MODEL_NAME = "ACE-Step"
 MODEL_CREATED = 1706688000  # Unix timestamp
 
@@ -596,7 +596,7 @@ def create_app() -> FastAPI:
     # Endpoints
     # -------------------------------------------------------------------------
     
-    @app.get("/api/v1/models", response_model=ModelsResponse)
+    @app.get("/v1/models", response_model=ModelsResponse)
     async def list_models(_: None = Depends(verify_api_key)) -> ModelsResponse:
         """List available models with capabilities and pricing."""
         return ModelsResponse(
