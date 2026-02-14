@@ -12,6 +12,7 @@ import types
 
 import torch
 import torch.nn as nn
+from safetensors.torch import load_file
 
 try:
     from peft import (
@@ -375,41 +376,42 @@ def load_training_checkpoint(
     elif os.path.exists(checkpoint_dir):
         result["adapter_path"] = checkpoint_dir
 
-    # Load training state
-    state_path = os.path.join(checkpoint_dir, "training_state.pt")
-    if os.path.exists(state_path):
-        map_location = device if device else "cpu"
-        training_state = torch.load(state_path, map_location=map_location, weights_only=True)
+    # Load training state (use safetensors; avoid unsafe pickle-based torch.load)
+    state_path_safe = os.path.join(checkpoint_dir, "training_state.safetensors")
+    if os.path.exists(state_path_safe):
+        # safetensors is a safe, non-executable tensor serialization format
+        try:
+            device_str = None
+            if device is not None:
+                # load_file expects a device string like "cpu" or "cuda:0"
+                device_str = str(device)
+            training_state_tensors = load_file(state_path_safe, device=device_str)  # type: ignore[arg-type]
 
-        result["epoch"] = training_state.get("epoch", 0)
-        result["global_step"] = training_state.get("global_step", 0)
+            # Expect scalar tensors for epoch/global_step if present
+            if "epoch" in training_state_tensors:
+                try:
+                    result["epoch"] = int(training_state_tensors["epoch"].item())
+                except Exception:
+                    logger.warning("Failed to parse 'epoch' from training_state.safetensors, using default 0")
+            if "global_step" in training_state_tensors:
+                try:
+                    result["global_step"] = int(training_state_tensors["global_step"].item())
+                except Exception:
+                    logger.warning("Failed to parse 'global_step' from training_state.safetensors, using default 0")
 
-        # Load optimizer state if provided
-        if optimizer is not None and "optimizer_state_dict" in training_state:
-            try:
-                optimizer.load_state_dict(training_state["optimizer_state_dict"])
-                result["loaded_optimizer"] = True
-                logger.info("Optimizer state loaded from checkpoint")
-            except Exception as e:
-                logger.warning(f"Failed to load optimizer state: {e}")
-
-        # Load scheduler state if provided
-        if scheduler is not None and "scheduler_state_dict" in training_state:
-            try:
-                scheduler.load_state_dict(training_state["scheduler_state_dict"])
-                result["loaded_scheduler"] = True
-                logger.info("Scheduler state loaded from checkpoint")
-            except Exception as e:
-                logger.warning(f"Failed to load scheduler state: {e}")
-
-        logger.info(f"Loaded checkpoint from epoch {result['epoch']}, step {result['global_step']}")
+            # For security, do not attempt to deserialize optimizer/scheduler state
+            # from arbitrary objects. If tensor-only states are added in the future,
+            # they can be wired here in a controlled way.
+            logger.info(f"Loaded checkpoint metadata from epoch {result['epoch']}, step {result['global_step']}")
+        except Exception as e:
+            logger.warning(f"Failed to load training_state.safetensors: {e}")
     else:
         # Fallback: extract epoch from path
         import re
         match = re.search(r'epoch_(\d+)', checkpoint_dir)
         if match:
             result["epoch"] = int(match.group(1))
-            logger.info(f"No training_state.pt found, extracted epoch {result['epoch']} from path")
+            logger.info(f"No training_state.safetensors found, extracted epoch {result['epoch']} from path")
 
     return result
 
