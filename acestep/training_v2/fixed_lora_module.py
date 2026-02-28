@@ -20,10 +20,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 # ACE-Step utilities
-from acestep.training.lora_injection import (
-    check_peft_available,
-    inject_lora_into_dit,
-)
+from acestep.training.lora_injection import inject_lora_into_dit
+from acestep.training.lora_utils import check_peft_available
 from acestep.training.lokr_utils import (
     check_lycoris_available,
     inject_lokr_into_dit,
