@@ -26,18 +26,6 @@ def _safe_enable_input_require_grads(self):
     orig_enable_input_require_grads = getattr(
         self, "_acestep_orig_enable_input_require_grads", None
     )
-    if orig_enable_input_require_grads is None:
-        if hasattr(self, "enable_input_require_grads") and not hasattr(
-            self, "_acestep_orig_enable_input_require_grads"
-        ):
-            self._acestep_orig_enable_input_require_grads = (
-                self.enable_input_require_grads
-            )
-            orig_enable_input_require_grads = (
-                self._acestep_orig_enable_input_require_grads
-            )
-        else:
-            orig_enable_input_require_grads = None
 
     try:
         if orig_enable_input_require_grads is not None:
