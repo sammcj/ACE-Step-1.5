@@ -5,8 +5,6 @@ Provides OpenAI Chat Completions API format for text-to-music generation.
 Endpoints:
 - GET  /v1/models            List available models with pricing
 - POST /v1/chat/completions  Generate music from text prompt
-- POST /v1/sample            LLM generates caption/lyrics/metadata from query
-- POST /v1/audio2code        Convert source audio to audio code tokens
 - GET  /health               Health check
 
 Usage:
