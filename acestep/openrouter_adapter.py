@@ -20,10 +20,11 @@ import os
 import re
 import tempfile
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from loguru import logger
 
 from acestep.openrouter_models import (
     AudioConfig,
@@ -138,6 +139,43 @@ def _base64_to_temp_file(b64_data: str, audio_format: str = "mp3") -> str:
     return path
 
 
+class _AudioBlob(NamedTuple):
+    """Deferred audio data extracted from a message (not yet on disk)."""
+
+    data: str
+    format: str
+
+
+def _materialize_audio_files(
+    blobs: List[_AudioBlob],
+) -> List[str]:
+    """Write deferred audio blobs to temporary files.
+
+    Args:
+        blobs: Audio blobs extracted by _parse_messages.
+
+    Returns:
+        List of temp file paths (caller must ensure cleanup).
+    """
+    paths: List[str] = []
+    for blob in blobs:
+        try:
+            path = _base64_to_temp_file(blob.data, blob.format)
+            paths.append(path)
+        except Exception:
+            pass
+    return paths
+
+
+def _cleanup_temp_paths(paths: List[str]) -> None:
+    """Remove temporary files, ignoring errors."""
+    for p in paths:
+        try:
+            os.remove(p)
+        except Exception:
+            pass
+
+
 def _extract_tagged_content(text: str) -> Tuple[Optional[str], Optional[str], str]:
     """
     Extract content from <prompt> and <lyrics> tags.
@@ -195,26 +233,22 @@ def _is_instrumental(lyrics: str) -> bool:
     return lyrics_clean in ("[inst]", "[instrumental]")
 
 
-def _parse_messages(messages: List[Any]) -> Tuple[str, str, List[str], Optional[str]]:
-    """
-    Parse chat messages to extract prompt, lyrics, sample_query and audio references.
+def _parse_messages(
+    messages: List[Any],
+) -> Tuple[str, str, List[_AudioBlob], Optional[str]]:
+    """Parse chat messages to extract prompt, lyrics, and audio references.
 
     Only processes the last user message (consistent with server behavior).
-
-    Supports two modes:
-    1. Tagged mode: Use <prompt>...</prompt> and <lyrics>...</lyrics> tags
-    2. Heuristic mode: Auto-detect based on content structure
-
-    Multiple input_audio blocks are collected in order (like multiple images).
-    The caller routes them to src_audio / reference_audio based on task_type.
+    Audio data is returned as deferred blobs — no temp files are created.
+    Call _materialize_audio_files to write them to disk.
 
     Returns:
-        (prompt, lyrics, audio_paths, sample_query)
+        (prompt, lyrics, audio_blobs, sample_query)
     """
     prompt = ""
     lyrics = ""
     sample_query = None
-    audio_paths: List[str] = []
+    audio_blobs: List[_AudioBlob] = []
 
     # Process only the last user message
     for msg in reversed(messages):
@@ -230,32 +264,32 @@ def _parse_messages(messages: List[Any]) -> Tuple[str, str, List[str], Optional[
                 if isinstance(part, dict):
                     part_type = part.get("type", "")
                     if part_type == "text":
-                        text_parts.append(part.get("text", "").strip())
+                        text_parts.append(
+                            part.get("text", "").strip()
+                        )
                     elif part_type == "input_audio":
-                        audio_data = part.get("input_audio", {})
-                        if isinstance(audio_data, dict):
-                            b64_data = audio_data.get("data", "")
-                            audio_format = audio_data.get("format", "mp3")
-                            if b64_data:
-                                try:
-                                    path = _base64_to_temp_file(b64_data, audio_format)
-                                    audio_paths.append(path)
-                                except Exception:
-                                    pass
+                        ad = part.get("input_audio", {})
+                        if isinstance(ad, dict):
+                            b64 = ad.get("data", "")
+                            fmt = ad.get("format", "mp3")
+                            if b64:
+                                audio_blobs.append(
+                                    _AudioBlob(b64, fmt)
+                                )
                 elif hasattr(part, "type"):
                     if part.type == "text":
-                        text_parts.append(getattr(part, "text", "").strip())
+                        text_parts.append(
+                            getattr(part, "text", "").strip()
+                        )
                     elif part.type == "input_audio":
-                        audio_data = getattr(part, "input_audio", None)
-                        if audio_data:
-                            b64_data = getattr(audio_data, "data", "")
-                            audio_format = getattr(audio_data, "format", "mp3")
-                            if b64_data:
-                                try:
-                                    path = _base64_to_temp_file(b64_data, audio_format)
-                                    audio_paths.append(path)
-                                except Exception:
-                                    pass
+                        ad = getattr(part, "input_audio", None)
+                        if ad:
+                            b64 = getattr(ad, "data", "")
+                            fmt = getattr(ad, "format", "mp3")
+                            if b64:
+                                audio_blobs.append(
+                                    _AudioBlob(b64, fmt)
+                                )
             content = "\n".join(text_parts).strip()
         else:
             content = content.strip()
@@ -264,7 +298,9 @@ def _parse_messages(messages: List[Any]) -> Tuple[str, str, List[str], Optional[
             break
 
         # Try to extract tagged content first
-        tagged_prompt, tagged_lyrics, remaining = _extract_tagged_content(content)
+        tagged_prompt, tagged_lyrics, remaining = (
+            _extract_tagged_content(content)
+        )
 
         if tagged_prompt is not None or tagged_lyrics is not None:
             prompt = tagged_prompt or ""
@@ -279,7 +315,7 @@ def _parse_messages(messages: List[Any]) -> Tuple[str, str, List[str], Optional[
                 prompt = content
         break
 
-    return prompt, lyrics, audio_paths, sample_query
+    return prompt, lyrics, audio_blobs, sample_query
 
 
 def _to_generate_music_request(
@@ -638,44 +674,73 @@ def create_openrouter_router(app_state_getter) -> APIRouter:
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Invalid request format: {str(e)}")
 
-        # Parse messages for text, audio, and sample_query
-        prompt, lyrics, audio_paths, sample_query = _parse_messages(req.messages)
+        # Parse messages — audio is returned as deferred blobs,
+        # no temp files are created yet.
+        prompt, lyrics, audio_blobs, sample_query = (
+            _parse_messages(req.messages)
+        )
 
-        # When lyrics or sample_mode is explicitly provided, the message text role
-        # is already known — skip auto-detection results.
-        # _parse_messages may have put raw text into prompt or sample_query;
-        # recover it as raw_text for re-assignment.
+        # When lyrics or sample_mode is explicitly provided,
+        # the message text role is already known.
         if req.lyrics or req.sample_mode:
             raw_text = prompt or sample_query or ""
             if req.lyrics:
-                # lyrics provided → message text is the prompt
                 prompt = raw_text
                 lyrics = req.lyrics
                 sample_query = None
             else:
-                # sample_mode → message text is the sample_query
                 prompt = ""
                 lyrics = ""
                 sample_query = raw_text
 
-        if not prompt and not lyrics and not sample_query and not req.sample_mode and not audio_paths:
+        has_audio = bool(audio_blobs)
+        if (not prompt and not lyrics
+                and not sample_query
+                and not req.sample_mode
+                and not has_audio):
             raise HTTPException(
                 status_code=400,
-                detail="No valid prompt, lyrics, sample query, or input audio found in request"
+                detail=(
+                    "No valid prompt, lyrics, sample query, "
+                    "or input audio found in request"
+                ),
             )
 
+        # Check queue capacity — still no temp files on disk.
+        job_queue = state.job_queue
+        if job_queue.full():
+            raise HTTPException(
+                status_code=429,
+                detail="Server busy: queue is full",
+            )
+
+        # Get audio format
+        audio_config = req.audio_config or AudioConfig()
+        audio_format = (
+            audio_config.format or DEFAULT_AUDIO_FORMAT
+        )
+
+        # Create job record first so we have a job_id for
+        # cleanup registration.
+        job_store = state.job_store
+        rec = job_store.create()
+
+        # Materialize audio blobs to temp files and register
+        # them for cleanup in one step — no leak window.
+        audio_paths = _materialize_audio_files(audio_blobs)
+        if audio_paths:
+            async with state.job_temp_files_lock:
+                state.job_temp_files.setdefault(
+                    rec.job_id, []
+                ).extend(audio_paths)
+
         # Route audio paths based on task_type.
-        # Multiple input_audio blocks are supported (like multiple images).
-        #
-        # For cover / repaint / lego / extract / complete:
-        #   audio[0] → src_audio       (primary: the audio to edit / cover)
-        #   audio[1] → reference_audio  (optional: style conditioning)
-        #
-        # For text2music (default):
-        #   audio[0] → reference_audio  (style conditioning)
         reference_audio_path = None
         src_audio_path = None
-        _SRC_AUDIO_TASK_TYPES = {"cover", "repaint", "lego", "extract", "complete"}
+        _SRC_AUDIO_TASK_TYPES = {
+            "cover", "repaint", "lego",
+            "extract", "complete",
+        }
         if audio_paths:
             if req.task_type in _SRC_AUDIO_TASK_TYPES:
                 src_audio_path = audio_paths[0]
@@ -684,42 +749,38 @@ def create_openrouter_router(app_state_getter) -> APIRouter:
             else:
                 reference_audio_path = audio_paths[0]
 
-        # Auto-convert src_audio to codes for cover mode when no codes provided
+        # Auto-convert src_audio to codes for cover mode
         resolved_audio_codes = req.audio_codes
-        if (src_audio_path and not resolved_audio_codes
+        if (src_audio_path
+                and not resolved_audio_codes
                 and req.task_type == "cover"):
             handler = getattr(state, "handler", None)
-            if handler and hasattr(handler, "convert_src_audio_to_codes"):
+            if handler and hasattr(
+                handler, "convert_src_audio_to_codes"
+            ):
                 try:
-                    codes_str = handler.convert_src_audio_to_codes(src_audio_path)
-                    if codes_str and not codes_str.startswith("❌"):
+                    codes_str = await asyncio.to_thread(
+                        handler.convert_src_audio_to_codes,
+                        src_audio_path,
+                    )
+                    if codes_str and not codes_str.startswith(
+                        "❌"
+                    ):
                         resolved_audio_codes = codes_str
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.error(
+                        "Auto-cover audio transcoding failed "
+                        "for {}: {}",
+                        src_audio_path,
+                        exc,
+                    )
 
         # Convert to GenerateMusicRequest
         gen_request = _to_generate_music_request(
-            req, prompt, lyrics, sample_query, reference_audio_path, src_audio_path,
+            req, prompt, lyrics, sample_query,
+            reference_audio_path, src_audio_path,
             audio_codes=resolved_audio_codes,
         )
-
-        # Check queue capacity
-        job_queue = state.job_queue
-        if job_queue.full():
-            raise HTTPException(status_code=429, detail="Server busy: queue is full")
-
-        # Get audio format
-        audio_config = req.audio_config or AudioConfig()
-        audio_format = audio_config.format or DEFAULT_AUDIO_FORMAT
-
-        # Create job record and submit to queue
-        job_store = state.job_store
-        rec = job_store.create()
-
-        # Track temp files from base64 audio uploads
-        if audio_paths:
-            async with state.job_temp_files_lock:
-                state.job_temp_files.setdefault(rec.job_id, []).extend(audio_paths)
 
         if req.stream:
             # Streaming: use progress_queue
