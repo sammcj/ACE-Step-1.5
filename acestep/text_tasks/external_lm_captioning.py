@@ -32,11 +32,12 @@ def caption_needs_retry(*, original_caption: str, generated_caption: str) -> boo
 def apply_user_metadata_overrides(*, plan: Any, user_metadata: dict[str, Any]) -> Any:
     """Preserve user-supplied metadata over any parsed provider drift."""
 
+    user_metadata = user_metadata or {}
     if not user_metadata:
         return plan
     if user_metadata.get("bpm") not in (None, ""):
         try:
-            plan.bpm = int(user_metadata["bpm"])
+            plan.bpm = int(float(user_metadata["bpm"]))
         except (TypeError, ValueError) as exc:
             logger.debug("Ignoring invalid external LM bpm override {!r}: {}", user_metadata["bpm"], exc)
     if user_metadata.get("duration") not in (None, ""):
@@ -64,9 +65,14 @@ def apply_user_metadata_overrides(*, plan: Any, user_metadata: dict[str, Any]) -
 
 
 def build_fallback_caption(*, caption: str, user_metadata: dict[str, Any]) -> str:
-    """Build a simple local narrative fallback when the provider keeps echoing input."""
+    """Return the local retry fallback built from the user's caption and metadata.
 
-    return build_localized_fallback_caption(caption=caption, user_metadata=user_metadata)
+    This path is used when the external provider returns an empty, unchanged, or still-too-short
+    caption after one retry attempt, so format mode remains usable without silently echoing the
+    original input back as the enhanced caption.
+    """
+
+    return build_localized_fallback_caption(caption=caption, user_metadata=user_metadata or {})
 
 
 def build_format_request_intent(
@@ -77,6 +83,7 @@ def build_format_request_intent(
 ) -> str:
     """Build the format-mode user intent string for external provider requests."""
 
+    user_metadata = user_metadata or {}
     intent_parts = [
         "Please format and enrich the following for ACE-Step generation.",
         f"Caption: {caption or ''}",

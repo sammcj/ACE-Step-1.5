@@ -56,7 +56,7 @@ class ExternalLmCaptioningTests(unittest.TestCase):
         result = apply_user_metadata_overrides(
             plan=plan,
             user_metadata={
-                "bpm": 125,
+                "bpm": "125.0",
                 "duration": 240,
                 "keyscale": "D major",
                 "timesignature": "4/4",
@@ -72,6 +72,17 @@ class ExternalLmCaptioningTests(unittest.TestCase):
         self.assertEqual(result.time_signature, "4/4")
         self.assertEqual(result.language, "es")
         self.assertEqual(result.vocal_language, "es")
+
+    def test_build_fallback_caption_preserves_literal_braces_in_caption(self) -> None:
+        """Literal braces in user captions should pass through the fallback safely."""
+
+        caption = build_fallback_caption(
+            caption="Track {remix} edition",
+            user_metadata={"bpm": 120},
+        )
+
+        self.assertIn("Track {remix} edition", caption)
+        self.assertIn("120 BPM", caption)
 
     def test_build_fallback_caption_uses_prompt_and_metadata(self) -> None:
         """Fallback caption should expand the original prompt into a narrative."""
@@ -116,6 +127,36 @@ class ExternalLmCaptioningTests(unittest.TestCase):
         self.assertIn("Dreamy city-pop", caption)
         self.assertIn("BPM前後", caption)
         self.assertNotIn("The groove stays anchored", caption)
+
+    def test_build_fallback_caption_localizes_zh_and_he_languages(self) -> None:
+        """Chinese and Hebrew locale fallbacks should use localized prose too."""
+
+        zh_caption = build_fallback_caption(
+            caption="霓虹 city-pop",
+            user_metadata={"language": "zh-CN", "bpm": 118},
+        )
+        he_caption = build_fallback_caption(
+            caption="לילה אלקטרוני",
+            user_metadata={"language": "he-IL", "bpm": 118},
+        )
+
+        self.assertIn("霓虹 city-pop", zh_caption)
+        self.assertIn("律动大致稳定在 118 BPM", zh_caption)
+        self.assertNotIn("The groove stays anchored", zh_caption)
+
+        self.assertIn("לילה אלקטרוני", he_caption)
+        self.assertIn("הגרוב נשאר מעוגן סביב 118 BPM", he_caption)
+        self.assertNotIn("The groove stays anchored", he_caption)
+
+    def test_build_fallback_caption_accepts_missing_metadata(self) -> None:
+        """Missing user metadata should behave like an empty metadata dict."""
+
+        caption = build_fallback_caption(
+            caption="Track {remix} edition",
+            user_metadata=None,
+        )
+
+        self.assertIn("Track {remix} edition", caption)
 
     def test_build_format_request_intent_omits_unknown_metadata(self) -> None:
         """Unknown metadata values should not be emitted into the request intent."""
@@ -181,6 +222,18 @@ class ExternalLmCaptioningTests(unittest.TestCase):
         self.assertNotIn("duration:", intent)
         self.assertNotIn("keyscale:", intent)
         self.assertNotIn("language:", intent)
+
+    def test_build_format_request_intent_accepts_missing_metadata(self) -> None:
+        """Missing user metadata should behave like an empty metadata dict."""
+
+        intent = build_format_request_intent(
+            caption="Dreamy synth-pop",
+            lyrics="City lights / carry me home",
+            user_metadata=None,
+        )
+
+        self.assertIn("Caption: Dreamy synth-pop", intent)
+        self.assertIn("Lyrics: City lights / carry me home", intent)
 
 
 if __name__ == "__main__":
