@@ -73,17 +73,22 @@ def get_user_preferences_head() -> str:
 # ── Restore-side: Gradio .load() wiring ─────────────────────────────────
 
 
-def _build_restore_js() -> str:
+def _build_restore_js(num_outputs: int) -> str:
     """Build the client-side JS that reads localStorage and returns values.
 
     The returned function is passed as the ``js`` parameter to
     ``demo.load()``.  It returns an array whose element order matches
     ``PREF_KEYS`` (and therefore the *outputs* list).
+
+    When localStorage has no saved preferences (first visit, cleared
+    storage, private browsing), the function returns an array of ``null``
+    sentinels so the Python side can skip the update and preserve whatever
+    values were already rendered from ``init_params``.
+
+    Args:
+        num_outputs: Total number of output components (preference keys
+            plus any extra outputs like ``mp3_controls_row``).
     """
-    defaults_json = json.dumps(
-        {k: _DEFAULTS[k] for k in PREF_KEYS},
-        ensure_ascii=False,
-    )
     keys_json = json.dumps(PREF_KEYS)
     # Build a type map so the restore JS can validate each value.
     type_map: dict[str, str] = {}
@@ -100,32 +105,36 @@ def _build_restore_js() -> str:
     # localStorage.  Only actual dropdown keys with numeric defaults need
     # coercion; sliders/numbers are already stored as numbers.
     numeric_dropdown_keys_json = json.dumps(["mp3_sample_rate"])
+    # Sentinel array returned when there is nothing to restore.  Using null
+    # lets the Python fn detect "no stored prefs" and return gr.update()
+    # for every output, preserving the values already rendered on the page.
+    skip_sentinel = f"new Array({num_outputs}).fill(null)"
     return f"""() => {{
         const STORAGE_KEY = {json.dumps(_STORAGE_KEY)};
         const SCHEMA_VERSION = {_SCHEMA_VERSION};
-        const DEFAULTS = {defaults_json};
         const KEYS = {keys_json};
         const TYPE_MAP = {type_map_json};
         const NUMERIC_COERCE_KEYS = new Set({numeric_dropdown_keys_json});
+        const SKIP = {skip_sentinel};
         try {{
             const raw = window.localStorage.getItem(STORAGE_KEY);
-            if (!raw) return KEYS.map(k => DEFAULTS[k]);
+            if (!raw) return SKIP;
             const prefs = JSON.parse(raw);
             // Only reset on downgrade; forward-compatible additions of new
-            // keys are handled by per-key defaulting below.
+            // keys are handled by skipping (preserving init_params).
             if (typeof prefs._version === "number" && prefs._version > SCHEMA_VERSION) {{
-                return KEYS.map(k => DEFAULTS[k]);
+                return SKIP;
             }}
-            return KEYS.map(k => {{
-                if (!(k in prefs)) return DEFAULTS[k];
+            const result = KEYS.map(k => {{
+                if (!(k in prefs)) return null;
                 let v = prefs[k];
-                // Type-check: fall back to default if the stored type does
-                // not match what the Gradio component expects.
+                // Type-check: fall back to null (skip) if the stored type
+                // does not match what the Gradio component expects.
                 const expected = TYPE_MAP[k];
                 if (expected && typeof v !== expected) {{
                     // Allow stringified numbers for dropdown coercion below.
                     if (!(NUMERIC_COERCE_KEYS.has(k) && typeof v === "string")) {{
-                        return DEFAULTS[k];
+                        return null;
                     }}
                 }}
                 // Coerce stringified numbers back for Dropdown choices that
@@ -133,41 +142,75 @@ def _build_restore_js() -> str:
                 if (NUMERIC_COERCE_KEYS.has(k) && typeof v === "string") {{
                     const n = Number(v);
                     if (Number.isFinite(n)) v = n;
-                    else return DEFAULTS[k];
+                    else return null;
                 }}
                 return v;
             }});
+            // If none of the keys had stored values, skip entirely.
+            if (result.every(v => v === null)) return SKIP;
+            // Compute mp3_controls_row visibility from audio_format (index 0).
+            // When audioFormat is null (no stored value), push null so Python
+            // emits gr.update() and preserves whatever init_params set.
+            const audioFormat = result[0];
+            result.push(audioFormat === null ? null : audioFormat === "mp3");
+            return result;
         }} catch (_e) {{
-            return KEYS.map(k => DEFAULTS[k]);
+            return SKIP;
         }}
     }}"""
 
 
 def restore_preferences(*values: Any) -> tuple[Any, ...]:
-    """Identity pass-through – Gradio requires a Python *fn* even when
-    the heavy lifting is done client-side by the *js* parameter.
+    """Map JS restore results into Gradio output values.
 
-    The JS function reads localStorage and produces an array of values.
-    Gradio calls this Python function with those values, and we return
-    them unchanged so they flow into the *outputs* components.
+    The JS function reads localStorage and produces an array.  Values
+    that are ``None`` (JSON ``null``) mean "no stored preference for this
+    key" -- we return ``gr.update()`` so Gradio leaves the component
+    unchanged, preserving whatever ``init_params`` set.
+
+    The last element (beyond ``PREF_KEYS``) is the mp3_controls_row
+    visibility boolean -- converted to ``gr.update(visible=...)``.
     """
-    return tuple(values)
+    import gradio as gr
+
+    n_prefs = len(PREF_KEYS)
+    results: list[Any] = []
+    for i, v in enumerate(values):
+        if v is None:
+            results.append(gr.update())
+        elif i >= n_prefs and isinstance(v, bool):
+            # Extra outputs beyond PREF_KEYS are visibility flags.
+            results.append(gr.update(visible=v))
+        else:
+            results.append(v)
+    return tuple(results)
 
 
 def wire_preference_restore(
     demo: Any,
     generation_section: dict[str, Any],
+    *,
+    service_mode: bool = False,
 ) -> None:
     """Attach a ``demo.load()`` handler that restores saved preferences.
 
     Must be called **inside** the ``with gr.Blocks() as demo:`` context,
     after all generation components have been created.
 
+    In service mode the function is a no-op: service-mode sessions use
+    server-side ``init_params`` and controls are locked
+    (``interactive=False``), so localStorage values must not override them.
+
     Args:
         demo: The ``gr.Blocks`` instance.
         generation_section: Merged component dict that includes the output
             control components (``audio_format``, ``mp3_bitrate``, etc.).
+        service_mode: When ``True``, skip wiring entirely so that
+            localStorage cannot override server-configured values.
     """
+    if service_mode:
+        return
+
     outputs = []
     for key in PREF_KEYS:
         component = generation_section.get(key)
@@ -178,9 +221,17 @@ def wire_preference_restore(
             )
         outputs.append(component)
 
+    # Also update mp3_controls_row visibility so it stays in sync when the
+    # restored audio_format differs from the server-rendered default.
+    # Gradio does not fire .change() for load-time value assignments, so
+    # without this the MP3 row could be visible/hidden incorrectly.
+    mp3_row = generation_section.get("mp3_controls_row")
+    if mp3_row is not None:
+        outputs.append(mp3_row)
+
     demo.load(
         fn=restore_preferences,
         inputs=None,
         outputs=outputs,
-        js=_build_restore_js(),
+        js=_build_restore_js(num_outputs=len(outputs)),
     )

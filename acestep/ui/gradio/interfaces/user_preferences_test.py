@@ -3,7 +3,24 @@
 import importlib.util
 import json
 from pathlib import Path
+import sys
+import types
 import unittest
+
+
+def _ensure_gradio_stub():
+    """Install a minimal ``gradio`` stub if the real package is absent.
+
+    The stub only provides ``gr.update()`` which returns a dict sentinel,
+    enough for ``restore_preferences`` to work in tests.
+    """
+    if "gradio" not in sys.modules:
+        gr = types.ModuleType("gradio")
+        gr.update = lambda **kwargs: {"__type__": "update", **kwargs}  # type: ignore[attr-defined]
+        sys.modules["gradio"] = gr
+
+
+_ensure_gradio_stub()
 
 
 def _load_module():
@@ -90,30 +107,26 @@ class SaveScriptTests(unittest.TestCase):
         self.assertEqual(script_1, script_2)
 
 
+_NUM_OUTPUTS = len(PREF_KEYS) + 1  # +1 for mp3_controls_row
+
+
 class RestoreTests(unittest.TestCase):
     """Tests for the Gradio-native restore mechanism."""
 
     def test_restore_js_returns_valid_javascript(self):
-        js = _build_restore_js()
+        js = _build_restore_js(_NUM_OUTPUTS)
         self.assertIn("localStorage", js)
         self.assertIn("SCHEMA_VERSION", js)
         self.assertIn("acestep.ui.user_preferences", js)
 
     def test_restore_js_includes_all_pref_keys(self):
-        js = _build_restore_js()
+        js = _build_restore_js(_NUM_OUTPUTS)
         for key in PREF_KEYS:
             self.assertIn(f'"{key}"', js, f"Missing key in restore JS: {key}")
 
-    def test_restore_js_includes_defaults_for_all_keys(self):
-        js = _build_restore_js()
-        for key in PREF_KEYS:
-            default = _DEFAULTS[key]
-            self.assertIn(json.dumps(default), js,
-                          f"Missing default for {key}={default!r}")
-
     def test_restore_js_only_resets_on_downgrade(self):
         """Version check should only discard prefs from future (higher) versions."""
-        js = _build_restore_js()
+        js = _build_restore_js(_NUM_OUTPUTS)
         self.assertIn("_version", js)
         self.assertIn("prefs._version > SCHEMA_VERSION", js)
         self.assertNotIn("prefs._version !== SCHEMA_VERSION", js)
@@ -121,21 +134,59 @@ class RestoreTests(unittest.TestCase):
     def test_restore_js_coerces_numeric_dropdown_values(self):
         """Dropdown values stored as strings in localStorage must be coerced
         back to numbers when the Gradio component expects integers."""
-        js = _build_restore_js()
+        js = _build_restore_js(_NUM_OUTPUTS)
         self.assertIn("NUMERIC_COERCE_KEYS", js)
         self.assertIn("Number(v)", js)
 
     def test_restore_js_validates_value_types(self):
         """Restore JS must include per-key type validation."""
-        js = _build_restore_js()
+        js = _build_restore_js(_NUM_OUTPUTS)
         self.assertIn("TYPE_MAP", js)
         self.assertIn("typeof v !== expected", js)
 
-    def test_restore_preferences_is_identity(self):
-        """The Python fn is a pass-through; values come from the JS side."""
-        values = ("flac", "320k", 44100, 0.8, False, -3.0, 0.5, 1.0, 0.05, 0.95, 4)
+    def test_restore_js_returns_null_sentinel_when_no_stored_prefs(self):
+        """When localStorage is empty the JS must return nulls so the Python
+        side can skip updates and preserve init_params."""
+        js = _build_restore_js(_NUM_OUTPUTS)
+        self.assertIn("SKIP", js)
+        self.assertIn("fill(null)", js)
+        # Should NOT contain DEFAULTS as a fallback for empty storage.
+        self.assertNotIn("DEFAULTS", js)
+
+    def test_restore_js_includes_mp3_visibility_computation(self):
+        """Restore JS should compute mp3_controls_row visibility from
+        the restored audio_format and append it."""
+        js = _build_restore_js(_NUM_OUTPUTS)
+        self.assertIn("audioFormat", js)
+        self.assertIn('result.push(', js)
+        self.assertIn('"mp3"', js)
+
+    def test_restore_preferences_passes_through_values(self):
+        """Non-None values are passed through unchanged."""
+        values = ("flac", "320k", 44100, 0.8, False, -3.0, 0.5, 1.0, 0.05, 0.95, 4, True)
         result = restore_preferences(*values)
-        self.assertEqual(result, values)
+        # First 11 values are direct pass-through, last is visibility.
+        for i in range(len(PREF_KEYS)):
+            self.assertEqual(result[i], values[i])
+
+    def test_restore_preferences_converts_none_to_gr_update(self):
+        """None values from JS should become gr.update() (no-op)."""
+        values = (None, None, None, None, None, None, None, None, None, None, None, None)
+        result = restore_preferences(*values)
+        for v in result:
+            self.assertIsInstance(v, dict, "None should be converted to gr.update()")
+            self.assertEqual(v["__type__"], "update")
+
+    def test_restore_preferences_converts_visibility_bool(self):
+        """The trailing boolean for mp3_controls_row should become
+        gr.update(visible=...) not a raw bool."""
+        values = ("mp3", "128k", 48000, 0.5, True, -1.0, 0.0, 0.0, 0.0, 1.0, 8, True)
+        result = restore_preferences(*values)
+        last = result[-1]
+        # Should NOT be a raw bool; should be a gr.update(visible=True) dict.
+        self.assertIsInstance(last, dict)
+        self.assertEqual(last["__type__"], "update")
+        self.assertTrue(last["visible"])
 
     def test_pref_keys_match_defaults(self):
         """Every PREF_KEY must have a corresponding default."""
@@ -143,8 +194,8 @@ class RestoreTests(unittest.TestCase):
             self.assertIn(key, _DEFAULTS, f"Key {key!r} missing from _DEFAULTS")
 
     def test_restore_js_generation_is_stable(self):
-        js_1 = _build_restore_js()
-        js_2 = _build_restore_js()
+        js_1 = _build_restore_js(_NUM_OUTPUTS)
+        js_2 = _build_restore_js(_NUM_OUTPUTS)
         self.assertEqual(js_1, js_2)
 
 
