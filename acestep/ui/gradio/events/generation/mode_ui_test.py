@@ -12,6 +12,7 @@ import unittest
 from types import SimpleNamespace
 
 try:
+    from acestep.constants import GENERATION_MODES_BASE, GENERATION_MODES_TURBO, MODE_TO_TASK_TYPE
     from acestep.ui.gradio.events.generation.mode_ui import compute_mode_ui_updates
     _IMPORT_ERROR = None
 except Exception as exc:  # pragma: no cover - environment dependency guard
@@ -89,13 +90,11 @@ class ModeUiStateClearingTests(unittest.TestCase):
         # Should be a no-op update (no value key)
         self.assertNotIn("value", src_update)
 
-    def test_raw_remix_mode_uses_source_audio_controls(self):
-        """Remix (Raw) should behave like Remix while selecting cover-nofsq."""
+    def test_remix_mode_uses_cover_task_and_source_audio_controls(self):
+        """Remix should keep the standard cover task and source-audio controls."""
         llm_handler = SimpleNamespace(llm_initialized=True)
-        result = compute_mode_ui_updates(
-            "Remix (Raw)", llm_handler=llm_handler, previous_mode="Custom",
-        )
-        self.assertEqual(result[_IDX_TASK_TYPE].get("value"), "cover-nofsq")
+        result = compute_mode_ui_updates("Remix", llm_handler=llm_handler, previous_mode="Custom")
+        self.assertEqual(result[_IDX_TASK_TYPE].get("value"), "cover")
         self.assertTrue(result[_IDX_SRC_AUDIO_ROW].get("visible"))
         self.assertEqual(result[_IDX_AUDIO_CODES].get("value"), "")
         self.assertFalse(result[_IDX_AUDIO_CODES].get("visible"))
@@ -105,6 +104,12 @@ class ModeUiStateClearingTests(unittest.TestCase):
         think_update = result[_IDX_THINK_CHECKBOX]
         self.assertFalse(think_update.get("value"))
         self.assertFalse(think_update.get("interactive"))
+
+    def test_generation_modes_do_not_expose_raw_remix_as_top_level_mode(self):
+        """Raw remix should be selected by no_fsq, not by a separate mode."""
+        self.assertNotIn("Remix (Raw)", GENERATION_MODES_TURBO)
+        self.assertNotIn("Remix (Raw)", GENERATION_MODES_BASE)
+        self.assertNotIn("Remix (Raw)", MODE_TO_TASK_TYPE)
 
     def test_repaint_mode_preserves_src_audio(self):
         """In Repaint mode, src_audio should not be cleared (it's needed)."""
@@ -126,15 +131,6 @@ class ModeUiStateClearingTests(unittest.TestCase):
         self.assertEqual(codes_update.get("value"), "")
         self.assertTrue(codes_update.get("visible"))
         # src_audio should also be cleared
-        self.assertIsNone(src_update.get("value"))
-
-    def test_round_trip_raw_remix_to_custom_clears_both(self):
-        """Switching Remix (Raw) -> Custom should clear stale raw-remix inputs."""
-        result = compute_mode_ui_updates("Custom", previous_mode="Remix (Raw)")
-        codes_update = result[_IDX_AUDIO_CODES]
-        src_update = result[_IDX_SRC_AUDIO]
-        self.assertEqual(codes_update.get("value"), "")
-        self.assertTrue(codes_update.get("visible"))
         self.assertIsNone(src_update.get("value"))
 
     def test_repaint_to_custom_clears_audio_codes(self):

@@ -81,6 +81,7 @@ def register_generation_run_handlers(context: GenerationWiringContext) -> None:
             generation_section["audio_cover_strength"],
             generation_section["cover_noise_strength"],
             generation_section["task_type"],
+            generation_section["no_fsq"],
             generation_section["use_adg"],
             generation_section["cfg_interval_start"],
             generation_section["cfg_interval_end"],

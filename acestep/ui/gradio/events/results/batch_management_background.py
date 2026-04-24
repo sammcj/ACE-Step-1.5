@@ -82,6 +82,7 @@ def generate_next_batch_background(
             audio_cover_strength=params.get("audio_cover_strength"),
             cover_noise_strength=params.get("cover_noise_strength", 0.0),
             task_type=params.get("task_type"),
+            no_fsq=params.get("no_fsq", False),
             use_adg=params.get("use_adg"),
             cfg_interval_start=params.get("cfg_interval_start"),
             cfg_interval_end=params.get("cfg_interval_end"),

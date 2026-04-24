@@ -19,7 +19,7 @@ def compute_mode_ui_updates(mode: str, llm_handler=None, previous_mode: str = "C
 
     is_simple = (mode == "Simple")
     is_custom = (mode == "Custom")
-    is_cover = mode in ("Remix", "Remix (Raw)")
+    is_cover = mode == "Remix"
     is_repaint = (mode == "Repaint")
     is_extract = (mode == "Extract")
     is_lego = (mode == "Lego")
@@ -68,7 +68,6 @@ def compute_mode_ui_updates(mode: str, llm_handler=None, previous_mode: str = "C
         "Simple": t("generation.mode_info_simple"),
         "Custom": t("generation.mode_info_custom"),
         "Remix": t("generation.mode_info_remix"),
-        "Remix (Raw)": t("generation.mode_info_remix"),
         "Repaint": t("generation.mode_info_repaint"),
         "Extract": t("generation.mode_info_extract"),
         "Lego": t("generation.mode_info_lego"),
@@ -116,9 +115,7 @@ def compute_mode_ui_updates(mode: str, llm_handler=None, previous_mode: str = "C
         auto_duration_update = gr.update()
 
     # Clear stale audio codes when leaving/returning from source-audio modes.
-    _prev_has_src_audio = previous_mode in (
-        "Remix", "Remix (Raw)", "Repaint", "Extract", "Lego", "Complete",
-    )
+    _prev_has_src_audio = previous_mode in ("Remix", "Repaint", "Extract", "Lego", "Complete")
     if is_custom:
         if _prev_has_src_audio:
             audio_codes_update = gr.update(value="", visible=True)
